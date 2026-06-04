@@ -1,0 +1,44 @@
+# Dependencies
+node_modules/
+
+# Frontend build output
+dist/
+build/
+artifacts/
+
+# Backend build output
+target/
+*.class
+*.jar
+*.war
+
+# Runtime data and uploaded files
+excel-service-demo/data/
+excel-service-demo/upload/
+excel-service-demo/src/main/resources/upload/
+excel-service-demo/upload_response*.json
+
+# Databases and generated data
+*.db
+*.mv.db
+*.trace.db
+*.sqlite
+*.sqlite3
+
+# Logs
+*.log
+logs/
+
+# IDE and editor files
+.idea/
+.vscode/
+*.iml
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Environment files
+.env
+.env.*
+!.env.example

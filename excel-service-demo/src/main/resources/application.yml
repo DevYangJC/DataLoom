@@ -1,0 +1,50 @@
+server:
+  port: 9191
+
+spring:
+  application:
+    name: excel-service-demo
+
+  # H2 内存数据库（Demo 用，启动即自动建表，无需安装 MySQL）
+  datasource:
+    driver-class-name: org.h2.Driver
+    url: jdbc:h2:file:./data/excel-demo;DB_CLOSE_DELAY=-1;MODE=MySQL
+    username: sa
+    password:
+  h2:
+    console:
+      enabled: true
+      path: /h2-console
+
+  # 文件上传大小限制
+  servlet:
+    multipart:
+      max-file-size: 100MB
+      max-request-size: 100MB
+
+  # 启动时执行建表 SQL
+  sql:
+    init:
+      mode: always
+      schema-locations: classpath:schema.sql
+
+# MyBatis-Plus
+mybatis-plus:
+  configuration:
+    map-underscore-to-camel-case: true
+    log-impl: org.apache.ibatis.logging.stdout.StdOutImpl
+  global-config:
+    db-config:
+      id-type: auto
+      logic-delete-value: 3
+      logic-not-delete-value: 1
+
+# 自定义配置
+excel:
+  upload:
+    path: ./upload
+
+# 日志
+logging:
+  level:
+    com.demo.excel: DEBUG
