@@ -1,24 +1,26 @@
 {
-  "name": "excel-web-demo",
-  "version": "1.0.0",
-  "description": "Excel 协作编辑系统 - 前端 Demo",
+  "name": "dataloom-web",
+  "version": "2.0.0",
+  "description": "DataLoom frontend built with Vue 3, Vite, and Element Plus",
   "private": true,
+  "type": "module",
   "scripts": {
-    "dev": "vue-cli-service serve --port 8081",
-    "serve": "vue-cli-service serve --port 8081",
-    "build": "vue-cli-service build"
+    "dev": "vite --host 0.0.0.0 --port 8081",
+    "build": "vite build",
+    "preview": "vite preview --host 0.0.0.0 --port 8081"
   },
   "dependencies": {
-    "axios": "^0.27.2",
-    "element-ui": "^2.15.10",
+    "@element-plus/icons-vue": "^2.3.1",
+    "axios": "^1.7.9",
+    "element-plus": "^2.10.7",
     "exceljs": "^4.4.0",
     "file-saver": "^2.0.5",
     "luckysheet": "^2.1.13",
-    "vue": "^2.6.14",
-    "vue-router": "^3.5.3"
+    "vue": "^3.5.13",
+    "vue-router": "^4.5.0"
   },
   "devDependencies": {
-    "@vue/cli-service": "^5.0.8",
-    "vue-template-compiler": "^2.6.14"
+    "@vitejs/plugin-vue": "^5.2.1",
+    "vite": "^6.0.7"
   }
 }

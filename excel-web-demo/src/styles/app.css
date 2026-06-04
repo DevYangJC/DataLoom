@@ -1,0 +1,64 @@
+:root {
+  --dl-bg: #f3f5f0;
+  --dl-panel: #ffffff;
+  --dl-ink: #17211b;
+  --dl-muted: #66736a;
+  --dl-line: #dce2dc;
+  --dl-accent: #2f7d57;
+  --dl-accent-strong: #185c3c;
+  --dl-warm: #b36b2c;
+  --dl-shadow: 0 18px 40px rgba(25, 40, 30, 0.08);
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body,
+#app {
+  min-height: 100%;
+  margin: 0;
+}
+
+body {
+  color: var(--dl-ink);
+  background: var(--dl-bg);
+  font-family: "Segoe UI", "Microsoft YaHei", sans-serif;
+  letter-spacing: 0;
+}
+
+button,
+input,
+textarea {
+  font: inherit;
+}
+
+.dl-page {
+  min-height: 100vh;
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.76), rgba(243, 245, 240, 0.92)),
+    repeating-linear-gradient(90deg, rgba(47, 125, 87, 0.06) 0 1px, transparent 1px 84px);
+}
+
+.dl-shell {
+  width: min(1180px, calc(100% - 40px));
+  margin: 0 auto;
+}
+
+.dl-icon-button {
+  width: 34px;
+  height: 34px;
+}
+
+.el-button {
+  border-radius: 6px;
+}
+
+.el-card {
+  border-radius: 8px;
+}
+
+.el-table {
+  --el-table-header-bg-color: #f7f8f5;
+}

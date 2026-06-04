@@ -1,5 +1,6 @@
 # Dependencies
 node_modules/
+excel-web-demo/.npm-cache/
 
 # Frontend build output
 dist/
@@ -37,6 +38,9 @@ logs/
 # OS files
 .DS_Store
 Thumbs.db
+
+# WorkBuddy workspace data
+.workbuddy/
 
 # Environment files
 .env

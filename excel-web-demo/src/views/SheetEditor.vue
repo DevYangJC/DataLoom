@@ -1,448 +1,427 @@
 <template>
-  <div class="sheet-editor">
-    <!-- ========== 顶部工具栏 ========== -->
-    <div class="editor-toolbar">
+  <main class="editor-page">
+    <header class="editor-toolbar">
       <div class="toolbar-left">
-        <el-button size="small" icon="el-icon-back"
-                   @click="$router.push('/')">返回列表</el-button>
-        <span class="doc-name">{{ documentName }}</span>
+        <el-button :icon="ArrowLeft" @click="goBack">返回列表</el-button>
+        <div class="doc-meta">
+          <strong>{{ documentName || '未命名文档' }}</strong>
+          <span v-if="loadingSheet">加载 Sheet 数据：{{ loadedChunks }}/{{ totalChunks }} 块</span>
+          <span v-else>{{ sheetCount }} 个 Sheet</span>
+        </div>
       </div>
-      <div class="toolbar-right">
-        <!-- 加载进度（大文件分块加载时展示） -->
-        <span v-if="loadingSheet" class="load-progress">
-          <i class="el-icon-loading"></i>
-          加载 Sheet 数据中... {{ loadedChunks }}/{{ totalChunks }} 块
-        </span>
-        
-        <el-tag v-if="hasUnsavedChanges" type="warning" size="small" style="margin-right: 8px">有未保存的修改</el-tag>
-        
-        <el-button size="small" type="primary" icon="el-icon-upload"
-                   @click="handleSave" :loading="saving">手动保存</el-button>
-        <el-button size="small" type="success" icon="el-icon-download"
-                   @click="handleExport" :loading="exporting">导出 Excel</el-button>
-      </div>
-    </div>
 
-    <!-- ========== Luckysheet 容器 ========== -->
-    <div id="luckysheet-container"></div>
-  </div>
+      <div class="toolbar-right">
+        <el-tag v-if="hasUnsavedChanges" type="warning" effect="light">有未保存修改</el-tag>
+        <el-button type="primary" :icon="Upload" :loading="saving" @click="saveChanges">保存</el-button>
+        <el-button type="success" :icon="Download" :loading="exporting" @click="exportCurrentWorkbook">
+          导出
+        </el-button>
+      </div>
+    </header>
+
+    <section class="sheet-stage">
+      <div v-if="booting" class="boot-panel">
+        <el-icon class="is-loading"><Loading /></el-icon>
+        <span>正在打开表格...</span>
+      </div>
+      <div id="luckysheet-container"></div>
+    </section>
+  </main>
 </template>
 
-<script>
-import { getDocument, loadAllCelldata, batchUpdateCells } from '@/api/excel'
+<script setup>
+import { computed, nextTick, onBeforeUnmount, onMounted, reactive, ref } from 'vue'
+import { useRoute, useRouter } from 'vue-router'
+import { ArrowLeft, Download, Loading, Upload } from '@element-plus/icons-vue'
+import { ElLoading, ElMessage } from 'element-plus'
+import { batchUpdateCells, getDocument, loadAllCelldata } from '@/api/excel'
 import { exportExcel } from '@/utils/export'
 
-export default {
-  name: 'SheetEditor',
-  data() {
-    return {
-      documentId: null,
-      documentName: '',
-      // 分块加载进度
-      loadingSheet: false,
-      loadedChunks: 0,
-      totalChunks: 0,
-      // 导出状态
-      exporting: false,
-      saving: false,
-      // luckysheet
-      luckysheetLoaded: false,
-      // 保存正在编辑的 sheetId 映射
-      sheetIdMap: {},
-      // 记录修改过的单元格
-      dirtyCells: {}
+const route = useRoute()
+const router = useRouter()
+
+const documentId = ref(route.params.id)
+const documentName = ref('')
+const sheetCount = ref(0)
+const booting = ref(true)
+const loadingSheet = ref(false)
+const loadedChunks = ref(0)
+const totalChunks = ref(0)
+const saving = ref(false)
+const exporting = ref(false)
+const sheetIdMap = reactive({})
+const dirtyCells = reactive({})
+
+let keydownHandler = null
+let toolbarClickHandler = null
+
+const hasUnsavedChanges = computed(() => Object.keys(dirtyCells).length > 0)
+
+onMounted(async () => {
+  await initDocument()
+})
+
+onBeforeUnmount(() => {
+  try {
+    if (keydownHandler) document.removeEventListener('keydown', keydownHandler, true)
+
+    const container = document.getElementById('luckysheet-container')
+    if (container && toolbarClickHandler) {
+      container.removeEventListener('click', toolbarClickHandler, true)
     }
-  },
 
-  computed: {
-    hasUnsavedChanges() {
-      return Object.keys(this.dirtyCells).length > 0
+    window.luckysheet?.destroy?.()
+  } catch (error) {
+    console.warn('Luckysheet destroy error:', error)
+  }
+})
+
+async function initDocument() {
+  const loading = ElLoading.service({
+    lock: true,
+    text: '正在加载文档结构...',
+    background: 'rgba(255,255,255,0.78)'
+  })
+
+  try {
+    const response = await getDocument(documentId.value)
+    const payload = response.data
+    if (!payload?.success) throw new Error(payload?.message || '文档不存在')
+
+    const doc = payload.data
+    documentId.value = doc.id
+    documentName.value = doc.name
+
+    const metas = doc.sheets || []
+    sheetCount.value = metas.length
+    metas.forEach((meta, index) => {
+      sheetIdMap[String(index)] = meta.sheetId
+    })
+
+    const sheets = buildInitialSheets(metas)
+    const firstMeta = metas[0]
+    if (firstMeta) {
+      loading.setText(`正在加载 ${firstMeta.sheetName || 'Sheet1'}...`)
+      sheets[0].celldata = await fetchSheetCelldata(firstMeta)
     }
-  },
 
-  /* ========== 生命周期 ========== */
-  async mounted() {
-    this.documentId = this.$route.params.id
-    await this.initDocument()
-  },
+    loading.close()
+    await nextTick()
+    initLuckysheet(sheets)
 
-  beforeDestroy() {
-    try {
-      if (this._keydownHandler) {
-        document.removeEventListener('keydown', this._keydownHandler, true)
-      }
-      if (this._toolbarClickHandler) {
-        const container = document.getElementById('luckysheet-container')
-        if (container) container.removeEventListener('click', this._toolbarClickHandler, true)
-      }
-      if (window.luckysheet) window.luckysheet.destroy()
-    } catch (e) {
-      console.warn('Luckysheet destroy error:', e)
+    if (metas.length > 1) {
+      loadRestSheets(metas, sheets)
     }
-  },
+  } catch (error) {
+    loading.close()
+    ElMessage.error(`打开文档失败：${error.message}`)
+    router.push({ name: 'Dashboard' })
+  } finally {
+    booting.value = false
+  }
+}
 
-  methods: {
-    /* =====================================================
-     * 1. 初始化：加载文档元信息 → 逐 Sheet 加载 celldata → 渲染 Luckysheet
-     * ===================================================== */
-    async initDocument() {
-      const loading = this.$loading({
-        lock: true,
-        text: '正在加载文档结构...',
-        background: 'rgba(255,255,255,0.8)'
-      })
+function buildInitialSheets(metas) {
+  if (metas.length === 0) {
+    return [{
+      name: 'Sheet1',
+      index: '0',
+      status: 1,
+      order: 0,
+      celldata: [],
+      config: { merge: {}, columnlen: {} }
+    }]
+  }
 
-      try {
-        // Step1：拉取文档元信息（快，不含 celldata）
-        const res = await getDocument(this.documentId)
-        if (!res.data || !res.data.success) {
-          this.$message.error('文档不存在')
-          this.$router.push('/')
-          return
-        }
-
-        const docData = res.data.data
-        this.documentId = docData.id
-        this.documentName = docData.name
-
-        const sheetMetas = docData.sheets || []
-        
-        // 建立索引与数据库 sheetId 的映射关系，供后续更新使用
-        sheetMetas.forEach((meta, idx) => {
-          this.sheetIdMap[idx] = meta.sheetId
-        })
-
-        // Step2：准备空 Luckysheet 结构（先用元信息 + 空 celldata 渲染壳子）
-        const luckySheets = sheetMetas.map((meta, idx) => ({
-          name: meta.sheetName || ('Sheet' + (idx + 1)),
-          index: String(idx),
-          status: idx === 0 ? 1 : 0,
-          order: idx,
-          celldata: [],   // 先空，Step3 再填入
-          config: {
-            merge: meta.mergeConfig || {},
-            columnlen: meta.columnLen || {}
-          },
-          // 暂存元信息，后续加载 celldata 用
-          _sheetId: meta.sheetId,
-          _chunkCount: meta.chunkCount,
-          _totalRows: meta.totalRows
-        }))
-
-        if (luckySheets.length === 0) {
-          luckySheets.push({
-            name: 'Sheet1', index: '0', status: 1, order: 0,
-            celldata: [], config: { merge: {}, columnlen: {} }
-          })
-        }
-
-        // Step3：加载第一个 Sheet 的 celldata（活动 Sheet 优先）
-        loading.close()
-
-        // 加载第一个 Sheet 全量数据
-        const firstMeta = sheetMetas[0]
-        if (firstMeta) {
-          loading.setText && loading.setText(`正在加载 ${firstMeta.sheetName} 数据...`)
-          const celldata = await this.fetchSheetCelldata(firstMeta.sheetId, firstMeta.chunkCount, firstMeta.totalRows)
-          luckySheets[0].celldata = celldata
-        }
-
-        // Step4：初始化 Luckysheet
-        this.initLuckysheet(luckySheets)
-
-        // Step5：后台静默加载其余 Sheet 的 celldata
-        if (sheetMetas.length > 1) {
-          this.loadRestSheets(sheetMetas, luckySheets)
-        }
-
-      } catch (e) {
-        loading.close()
-        this.$message.error('加载失败: ' + e.message)
-        console.error(e)
-        this.$router.push('/')
-      }
+  return metas.map((meta, index) => ({
+    name: meta.sheetName || `Sheet${index + 1}`,
+    index: String(index),
+    status: index === 0 ? 1 : 0,
+    order: index,
+    celldata: [],
+    config: {
+      merge: meta.mergeConfig || {},
+      columnlen: meta.columnLen || {}
     },
+    _sheetId: meta.sheetId
+  }))
+}
 
-    /* =====================================================
-     * 2. 加载指定 Sheet 的全量 celldata（自动合并所有分块）
-     * @param {Number} sheetId    - Sheet 数据库 ID
-     * @param {Number} chunkCount - 分块总数
-     * @param {Number} totalRows  - 总行数（用于进度提示）
-     * ===================================================== */
-    async fetchSheetCelldata(sheetId, chunkCount, totalRows) {
-      this.loadingSheet = true
-      this.loadedChunks = 0
-      this.totalChunks = chunkCount || 1
+async function fetchSheetCelldata(meta) {
+  loadingSheet.value = true
+  loadedChunks.value = 0
+  totalChunks.value = meta.chunkCount || 1
 
-      try {
-        // 直接调用 /all 接口（后端一次性合并所有块返回）
-        // 如需前端逐块控制进度，可改为逐块调用 loadChunks
-        const res = await loadAllCelldata(this.documentId, sheetId)
-        if (res.data && res.data.success) {
-          this.loadedChunks = this.totalChunks
-          const celldata = res.data.data.celldata || []
-          console.log(`[Sheet ${sheetId}] 加载完成: ${celldata.length} 个单元格，共 ${totalRows} 行`)
-          return celldata
-        }
-        return []
-      } catch (e) {
-        console.error(`[Sheet ${sheetId}] celldata 加载失败:`, e)
-        return []
-      } finally {
-        this.loadingSheet = false
-      }
-    },
+  try {
+    const response = await loadAllCelldata(documentId.value, meta.sheetId)
+    const payload = response.data
+    if (!payload?.success) throw new Error(payload?.message || 'Sheet 数据加载失败')
 
-    /* =====================================================
-     * 3. 后台静默加载剩余 Sheet（不阻塞用户操作）
-     * ===================================================== */
-    async loadRestSheets(sheetMetas, luckySheets) {
-      for (let i = 1; i < sheetMetas.length; i++) {
-        const meta = sheetMetas[i]
-        try {
-          const celldata = await this.fetchSheetCelldata(meta.sheetId, meta.chunkCount, meta.totalRows)
-          luckySheets[i].celldata = celldata
+    loadedChunks.value = totalChunks.value
+    return payload.data?.celldata || []
+  } catch (error) {
+    ElMessage.warning(`${meta.sheetName || 'Sheet'} 加载失败：${error.message}`)
+    return []
+  } finally {
+    loadingSheet.value = false
+  }
+}
 
-          // 【关键修复】必须更新 Luckysheet 的内部内存，而不是我们初始化的 local 数组
-          if (window.luckysheet && typeof window.luckysheet.getluckysheetfile === 'function') {
-            try {
-              const allFiles = window.luckysheet.getluckysheetfile()
-              // Luckysheet 内部默认使用 String(index) 作为唯一标识
-              const targetFile = allFiles.find(f => f.index === String(i))
-              if (targetFile) {
-                targetFile.celldata = celldata
-                // 如果用户已经切换到了这个 Sheet（手速极快），或者它正处于激活状态，
-                // 仅更新 celldata 是不够的，需要强制它根据 celldata 重构底层二维数组 data
-                if (targetFile.data && targetFile.data.length > 0) {
-                   targetFile.data = window.luckysheet.buildGridData(targetFile)
-                   if (window.luckysheet.getSheet().index === targetFile.index) {
-                     window.luckysheet.refresh() // 刷新视图
-                   }
-                }
-              }
-              console.log(`[Sheet ${meta.sheetName}] 后台数据加载完成: ${celldata.length} 格`)
-            } catch (e) {
-              console.warn('更新 Sheet 数据失败:', e)
-            }
-          }
-        } catch (e) {
-          console.error(`后台加载 Sheet[${meta.sheetName}] 失败:`, e)
-        }
-      }
-    },
+async function loadRestSheets(metas, sheets) {
+  for (let index = 1; index < metas.length; index += 1) {
+    const meta = metas[index]
+    const celldata = await fetchSheetCelldata(meta)
+    sheets[index].celldata = celldata
+    injectSheetData(index, celldata)
+  }
+}
 
-    /* =====================================================
-     * 4. 初始化 Luckysheet
-     * ===================================================== */
-    initLuckysheet(sheets) {
-      setTimeout(() => {
-        try { window.luckysheet.destroy() } catch (e) { /* ignore */ }
+function initLuckysheet(sheets) {
+  if (!window.luckysheet) {
+    ElMessage.error('Luckysheet 资源未加载，请检查网络或 CDN 配置')
+    return
+  }
 
-        window.luckysheet.create({
-          container: 'luckysheet-container',
-          lang: 'zh',
-          showtoolbar: true,
-          showinfobar: false,
-          showstatisticBar: true,
-          allowUpdate: true, // 打开 Luckysheet 原生的实时协同，消除 WebSocket 报错
-          forceCalculation: true, // 强制加载时重算并建立公式计算链
+  try {
+    window.luckysheet.destroy?.()
+  } catch {
+    // Ignore stale instances created by previous route visits.
+  }
 
-          data: sheets.map((sheet, index) => ({
-            name: sheet.name || ('Sheet' + (index + 1)),
-            index: String(index),
-            status: sheet.status !== undefined ? sheet.status : (index === 0 ? 1 : 0),
-            order: index,
-            celldata: sheet.celldata || [],
-            config: sheet.config || { merge: {}, columnlen: {} }
-          })),
+  window.luckysheet.create({
+    container: 'luckysheet-container',
+    lang: 'zh',
+    showtoolbar: true,
+    showinfobar: false,
+    showstatisticBar: true,
+    allowUpdate: true,
+    forceCalculation: true,
+    data: sheets.map((sheet, index) => ({
+      name: sheet.name || `Sheet${index + 1}`,
+      index: String(index),
+      status: sheet.status ?? (index === 0 ? 1 : 0),
+      order: index,
+      celldata: sheet.celldata || [],
+      config: sheet.config || { merge: {}, columnlen: {} }
+    })),
+    hook: {
+      updated: () => markCurrentSelectionDirty(),
+      cellUpdated: (r, c, oldValue, newValue) => markCellDirty(r, c, newValue)
+    }
+  })
 
-          hook: {
-            // 全局更新钩子
-            updated: (operate) => {
-              if (!operate || !this.documentId) return
-              this._markCurrentSelectionDirty()
-            },
-            // 当单元格编辑模式（双击输入框）完成时触发
-            cellUpdated: (r, c, oldValue, newValue, isRefresh) => {
-              if (!this.documentId) return
-              const dbSheetId = this.sheetIdMap[window.luckysheet.getSheet().index]
-              if (!dbSheetId) return
-              
-              const key = `${dbSheetId}_${r}_${c}`
-              const newDirty = { ...this.dirtyCells }
-              
-              // 优先使用传入的最新的 newValue（含有公式 f），若为空再降级从全局内存中取，避免因异步计算时序造成的公式丢失
-              let fullCell = null
-              if (newValue && typeof newValue === 'object') {
-                fullCell = newValue
-              } else {
-                const sheetData = window.luckysheet.getSheetData()
-                fullCell = sheetData[r] ? sheetData[r][c] : null
-              }
-
-              newDirty[key] = { sheetId: dbSheetId, r, c, v: fullCell }
-              this.dirtyCells = newDirty
-            }
-          }
-        })
-
-        // ====== 终极防御：统一拦截所有的键盘删除与工具栏点击 ======
-        this._keydownHandler = (e) => {
-          if (e.key === 'Delete' || e.key === 'Backspace') {
-            // 稍微延迟一下，等待 luckysheet 处理完内存数据清空
-            setTimeout(() => this._markCurrentSelectionDirty(), 50)
-          }
-        }
-        
-        this._toolbarClickHandler = (e) => {
-          // 如果点击了工具栏、右键菜单、颜色面板等，说明可能修改了样式
-          // 稍微延迟一下，等待 luckysheet 完成样式更新
-          setTimeout(() => this._markCurrentSelectionDirty(), 100)
-        }
-
-        // 绑定捕获阶段事件
-        document.addEventListener('keydown', this._keydownHandler, true)
-        const container = document.getElementById('luckysheet-container')
-        if (container) {
-          container.addEventListener('click', this._toolbarClickHandler, true)
-        }
-
-      }, 300)
-    },
-
-    // 提取公共方法：主动将当前选中的所有单元格（并抓取它们的最新数据）标记为已修改
-    _markCurrentSelectionDirty() {
-      if (!window.luckysheet) return
-      const rangeArray = window.luckysheet.getRange()
-      if (!rangeArray || rangeArray.length === 0) return
-      
-      const currentSheetIndex = window.luckysheet.getSheet().index
-      const dbSheetId = this.sheetIdMap[currentSheetIndex]
-      if (!dbSheetId) return
-
-      let newDirty = { ...this.dirtyCells }
-      const sheetData = window.luckysheet.getSheetData()
-
-      rangeArray.forEach(rObj => {
-        if (!rObj.row || !rObj.column) return
-        for (let r = rObj.row[0]; r <= rObj.row[1]; r++) {
-          for (let c = rObj.column[0]; c <= rObj.column[1]; c++) {
-            const key = `${dbSheetId}_${r}_${c}`
-            const fullCell = sheetData[r] ? sheetData[r][c] : null
-            newDirty[key] = { sheetId: dbSheetId, r, c, v: fullCell }
-          }
-        }
-      })
-      this.dirtyCells = newDirty
-    },
-
-    /* =====================================================
-     * 6. 手动保存（批量更新）
-     * ===================================================== */
-    async handleSave() {
-      const updates = Object.values(this.dirtyCells)
-      if (updates.length === 0) {
-        this.$message.info('没有需要保存的修改')
-        return
-      }
-
-      this.saving = true
-      try {
-        await batchUpdateCells(this.documentId, updates)
-        this.$message.success(`保存成功（共 ${updates.length} 个单元格）`)
-        // 清空脏数据标记
-        this.dirtyCells = {}
-      } catch (e) {
-        this.$message.error('保存失败: ' + e.message)
-      } finally {
-        this.saving = false
-      }
-    },
-
-    /* =====================================================
-     * 7. 导出为 xlsx（由前端导出，完美保留样式）
-     * ===================================================== */
-    async handleExport() {
-      if (this.hasUnsavedChanges) {
-        this.$message.warning('您有未保存的修改，请先保存再导出')
-        return
-      }
-      this.exporting = true
-      try {
-        this.$message.info('正在导出，请稍候...')
-        if (!window.luckysheet) {
-          throw new Error('表格未初始化')
-        }
-        await exportExcel(window.luckysheet.getAllSheets(), this.documentName)
-        this.$message.success('导出成功')
-      } catch (e) {
-        this.$message.error('导出失败: ' + e.message)
-        console.error(e)
-      } finally {
-        this.exporting = false
-      }
+  keydownHandler = (event) => {
+    if (event.key === 'Delete' || event.key === 'Backspace') {
+      window.setTimeout(markCurrentSelectionDirty, 50)
     }
   }
+
+  toolbarClickHandler = () => {
+    window.setTimeout(markCurrentSelectionDirty, 100)
+  }
+
+  document.addEventListener('keydown', keydownHandler, true)
+  document.getElementById('luckysheet-container')?.addEventListener('click', toolbarClickHandler, true)
+}
+
+function injectSheetData(index, celldata) {
+  const luckysheet = window.luckysheet
+  if (!luckysheet?.getluckysheetfile) return
+
+  try {
+    const files = luckysheet.getluckysheetfile()
+    const target = files.find((file) => file.index === String(index))
+    if (!target) return
+
+    target.celldata = celldata
+    if (target.data && luckysheet.buildGridData) {
+      target.data = luckysheet.buildGridData(target)
+    }
+    if (luckysheet.getSheet?.()?.index === target.index) {
+      luckysheet.refresh?.()
+    }
+  } catch (error) {
+    console.warn('Inject sheet data failed:', error)
+  }
+}
+
+function markCellDirty(r, c, newValue) {
+  const luckysheet = window.luckysheet
+  const currentSheet = luckysheet?.getSheet?.()
+  if (!currentSheet) return
+
+  const dbSheetId = sheetIdMap[currentSheet.index]
+  if (!dbSheetId) return
+
+  const sheetData = luckysheet.getSheetData?.() || []
+  const fullCell = newValue && typeof newValue === 'object' ? newValue : sheetData[r]?.[c] || null
+  dirtyCells[`${dbSheetId}_${r}_${c}`] = { sheetId: dbSheetId, r, c, v: fullCell }
+}
+
+function markCurrentSelectionDirty() {
+  const luckysheet = window.luckysheet
+  const ranges = luckysheet?.getRange?.()
+  const currentSheet = luckysheet?.getSheet?.()
+  if (!ranges?.length || !currentSheet) return
+
+  const dbSheetId = sheetIdMap[currentSheet.index]
+  if (!dbSheetId) return
+
+  const sheetData = luckysheet.getSheetData?.() || []
+  ranges.forEach((range) => {
+    if (!range.row || !range.column) return
+
+    for (let r = range.row[0]; r <= range.row[1]; r += 1) {
+      for (let c = range.column[0]; c <= range.column[1]; c += 1) {
+        dirtyCells[`${dbSheetId}_${r}_${c}`] = {
+          sheetId: dbSheetId,
+          r,
+          c,
+          v: sheetData[r]?.[c] || null
+        }
+      }
+    }
+  })
+}
+
+async function saveChanges() {
+  const updates = Object.values(dirtyCells)
+  if (updates.length === 0) {
+    ElMessage.info('没有需要保存的修改')
+    return
+  }
+
+  saving.value = true
+  try {
+    await batchUpdateCells(documentId.value, updates)
+    Object.keys(dirtyCells).forEach((key) => delete dirtyCells[key])
+    ElMessage.success(`保存成功，共 ${updates.length} 个单元格`)
+  } catch (error) {
+    ElMessage.error(`保存失败：${error.message}`)
+  } finally {
+    saving.value = false
+  }
+}
+
+async function exportCurrentWorkbook() {
+  if (hasUnsavedChanges.value) {
+    ElMessage.warning('请先保存当前修改后再导出')
+    return
+  }
+
+  exporting.value = true
+  try {
+    const sheets = window.luckysheet?.getAllSheets?.()
+    if (!sheets) throw new Error('表格尚未初始化')
+
+    await exportExcel(sheets, documentName.value)
+    ElMessage.success('导出完成')
+  } catch (error) {
+    ElMessage.error(`导出失败：${error.message}`)
+  } finally {
+    exporting.value = false
+  }
+}
+
+function goBack() {
+  router.push({ name: 'Dashboard' })
 }
 </script>
 
 <style scoped>
-.sheet-editor {
-  height: 100vh;
+.editor-page {
   display: flex;
   flex-direction: column;
-  overflow: hidden; /* 彻底锁定视口，防止出现浏览器外层原生滚动条 */
+  height: 100vh;
+  overflow: hidden;
+  background: #eef2eb;
 }
 
-/* 顶部工具栏 */
 .editor-toolbar {
-  height: 48px;
+  z-index: 10;
   display: flex;
   align-items: center;
   justify-content: space-between;
-  padding: 0 16px;
-  background: #f5f7fa;
-  border-bottom: 1px solid #e4e7ed;
-  flex-shrink: 0;
-  z-index: 10;
+  gap: 16px;
+  min-height: 58px;
+  padding: 10px 16px;
+  border-bottom: 1px solid var(--dl-line);
+  background: rgba(255, 255, 255, 0.94);
+  box-shadow: 0 8px 24px rgba(20, 32, 24, 0.08);
 }
 
-.toolbar-left {
+.toolbar-left,
+.toolbar-right {
   display: flex;
   align-items: center;
-  gap: 12px;
+  gap: 10px;
+  min-width: 0;
 }
 
-.doc-name {
-  font-size: 14px;
-  font-weight: 500;
-  color: #303133;
-  max-width: 300px;
+.doc-meta {
+  display: grid;
+  gap: 2px;
+  min-width: 0;
+}
+
+.doc-meta strong,
+.doc-meta span {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 
-.toolbar-right {
-  display: flex;
-  align-items: center;
-  gap: 8px;
+.doc-meta strong {
+  max-width: 360px;
+  font-size: 14px;
 }
 
-/* 加载进度提示 */
-.load-progress {
+.doc-meta span {
+  color: var(--dl-muted);
   font-size: 12px;
-  color: #909399;
-  display: flex;
-  align-items: center;
-  gap: 4px;
 }
 
-/* Luckysheet 容器占满剩余空间 */
-#luckysheet-container {
-  flex: 1;
+.sheet-stage {
   position: relative;
+  flex: 1;
+  min-height: 0;
+}
+
+#luckysheet-container {
+  position: relative;
+  width: 100%;
+  height: 100%;
   overflow: hidden;
-  height: 0; /* 阻止 flex 布局在没有显式高度时被内部绝对定位子元素无限撑开 */
+}
+
+.boot-panel {
+  position: absolute;
+  inset: 18px;
+  z-index: 2;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  border: 1px solid var(--dl-line);
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.9);
+  color: var(--dl-muted);
+}
+
+@media (max-width: 760px) {
+  .editor-toolbar {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .toolbar-left,
+  .toolbar-right {
+    justify-content: space-between;
+    width: 100%;
+  }
+
+  .doc-meta strong {
+    max-width: 190px;
+  }
 }
 </style>

@@ -1,13 +1,18 @@
-import Vue from 'vue'
+import { createApp } from 'vue'
+import ElementPlus from 'element-plus'
+import 'element-plus/dist/index.css'
+import * as ElementPlusIconsVue from '@element-plus/icons-vue'
+
 import App from './App.vue'
 import router from './router'
-import ElementUI from 'element-ui'
+import './styles/app.css'
 
-Vue.use(ElementUI)
+const app = createApp(App)
 
-Vue.config.productionTip = false
+for (const [name, component] of Object.entries(ElementPlusIconsVue)) {
+  app.component(name, component)
+}
 
-new Vue({
-  router,
-  render: h => h(App)
-}).$mount('#app')
+app.use(ElementPlus)
+app.use(router)
+app.mount('#app')

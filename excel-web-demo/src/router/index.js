@@ -1,24 +1,20 @@
-import Vue from 'vue'
-import Router from 'vue-router'
+import { createRouter, createWebHashHistory } from 'vue-router'
 
-Vue.use(Router)
+const routes = [
+  {
+    path: '/',
+    name: 'Dashboard',
+    component: () => import('@/views/ExcelDashboard.vue')
+  },
+  {
+    path: '/edit/:id',
+    name: 'SheetEditor',
+    component: () => import('@/views/SheetEditor.vue'),
+    props: true
+  }
+]
 
-// 懒加载页面组件
-const ExcelDashboard = () => import('@/views/ExcelDashboard.vue')
-const SheetEditor = () => import('@/views/SheetEditor.vue')
-
-export default new Router({
-  mode: 'hash',
-  routes: [
-    {
-      path: '/',
-      name: 'Dashboard',
-      component: ExcelDashboard
-    },
-    {
-      path: '/edit/:id',
-      name: 'SheetEditor',
-      component: SheetEditor
-    }
-  ]
+export default createRouter({
+  history: createWebHashHistory(),
+  routes
 })
