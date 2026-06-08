@@ -108,13 +108,19 @@ public class ExcelDocumentController {
             info.put("chunkCount", s.getChunkCount());
             info.put("active", s.getActive());
             // 合并单元格和列宽解析后放入（结构较小）
-            try {
-                info.put("mergeConfig", JSONObject.parseObject(s.getMergeConfigJson()));
-                info.put("columnLen", JSONObject.parseObject(s.getColumnLenJson()));
-            } catch (Exception e) {
-                info.put("mergeConfig", new JSONObject());
-                info.put("columnLen", new JSONObject());
+            JSONObject mergeConfig = parseObjectOrEmpty(s.getMergeConfigJson());
+            JSONObject columnLen = parseObjectOrEmpty(s.getColumnLenJson());
+            JSONObject rowLen = parseObjectOrEmpty(s.getRowLenJson());
+            JSONObject config = parseObjectOrEmpty(s.getConfigJson());
+            if (config.isEmpty()) {
+                config.put("merge", mergeConfig);
+                config.put("columnlen", columnLen);
+                config.put("rowlen", rowLen);
             }
+            info.put("config", config);
+            info.put("mergeConfig", mergeConfig);
+            info.put("columnLen", columnLen);
+            info.put("rowLen", rowLen);
             sheetInfoList.add(info);
         }
 
@@ -293,16 +299,47 @@ public class ExcelDocumentController {
     }
 
     /**
-     * 删除文档（软删除文档主记录 + 级联清理 Sheet 和 Chunk）
-     *
-     * @param id 文档 ID
-     * @return 操作结果
+     * Save the full Luckysheet workbook snapshot.
+     * This keeps sheet creation, rename, ordering, row/column settings, merges and celldata together.
      */
+    @SuppressWarnings("unchecked")
+    @PutMapping("/{id}/workbook")
+    public ApiResponse<?> saveWorkbook(@PathVariable Long id,
+                                       @RequestBody Map<String, Object> body) {
+        try {
+            Object sheetsObj = body.get("sheets");
+            if (!(sheetsObj instanceof List)) {
+                return ApiResponse.fail("sheets 不能为空");
+            }
+
+            List<Map<String, Object>> sheets = (List<Map<String, Object>>) sheetsObj;
+            sheetService.replaceWorkbook(id, sheets);
+
+            log.info("工作簿快照保存成功: documentId={}, sheetCount={}", id, sheets.size());
+            return ApiResponse.ok("保存成功");
+        } catch (Exception e) {
+            log.error("工作簿快照保存失败: documentId={}, error={}", id, e.getMessage(), e);
+            return ApiResponse.fail("保存失败: " + e.getMessage());
+        }
+    }
+
     @DeleteMapping("/{id}")
     public ApiResponse<?> delete(@PathVariable Long id) {
         documentService.delete(id);
         sheetService.deleteByDocumentId(id);
         log.info("文档已删除: documentId={}", id);
         return ApiResponse.ok("删除成功");
+    }
+
+    private JSONObject parseObjectOrEmpty(String json) {
+        if (json == null || json.trim().isEmpty()) {
+            return new JSONObject();
+        }
+        try {
+            JSONObject parsed = JSONObject.parseObject(json);
+            return parsed == null ? new JSONObject() : parsed;
+        } catch (Exception ignored) {
+            return new JSONObject();
+        }
     }
 }

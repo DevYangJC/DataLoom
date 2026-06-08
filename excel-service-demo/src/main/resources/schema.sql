@@ -32,11 +32,16 @@ CREATE TABLE IF NOT EXISTS excel_sheet (
     chunk_count         INT            DEFAULT 0,
     merge_config_json   CLOB,
     column_len_json     CLOB,
+    row_len_json        CLOB,
+    config_json         CLOB,
     active              INT            DEFAULT 0,
     status              INT            DEFAULT 1,
     create_time         TIMESTAMP      DEFAULT CURRENT_TIMESTAMP,
     update_time         TIMESTAMP      DEFAULT CURRENT_TIMESTAMP
 );
+
+ALTER TABLE excel_sheet ADD COLUMN IF NOT EXISTS row_len_json CLOB;
+ALTER TABLE excel_sheet ADD COLUMN IF NOT EXISTS config_json CLOB;
 
 -- ==============================
 -- 3. Sheet 数据分块表（每块约 1000 行）
@@ -82,6 +87,8 @@ CREATE TABLE IF NOT EXISTS excel_sheet_chunk (
 --     chunk_count         INT            DEFAULT 0 COMMENT '分块数量',
 --     merge_config_json   LONGTEXT       COMMENT '合并单元格配置 JSON',
 --     column_len_json     LONGTEXT       COMMENT '列宽配置 JSON',
+--     row_len_json        LONGTEXT       COMMENT '行高配置 JSON',
+--     config_json         LONGTEXT       COMMENT 'Luckysheet 完整 config JSON',
 --     active              TINYINT        DEFAULT 0 COMMENT '是否激活：1是 0否',
 --     status              TINYINT        DEFAULT 1 COMMENT '1正常 3已删除',
 --     create_time         DATETIME       DEFAULT CURRENT_TIMESTAMP,

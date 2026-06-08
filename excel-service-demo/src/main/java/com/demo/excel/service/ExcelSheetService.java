@@ -1,5 +1,7 @@
 package com.demo.excel.service;
 
+import com.alibaba.fastjson.JSONArray;
+import com.alibaba.fastjson.JSONObject;
 import com.baomidou.mybatisplus.core.conditions.query.QueryWrapper;
 import com.demo.excel.entity.ExcelSheet;
 import com.demo.excel.entity.ExcelSheetChunk;
@@ -12,6 +14,8 @@ import org.springframework.transaction.annotation.Transactional;
 import java.util.List;
 import java.util.Map;
 import java.util.HashMap;
+import java.util.ArrayList;
+import java.util.LinkedHashMap;
 
 /**
  * Excel Sheet 及数据分块查询服务
@@ -31,6 +35,9 @@ public class ExcelSheetService {
 
     @Autowired
     private ExcelSheetChunkMapper chunkMapper;
+
+    @Autowired
+    private ExcelDocumentService documentService;
 
     /**
      * 查询文档下的所有 Sheet 元信息列表（按 sheetIndex 升序，不含 celldata）
@@ -278,5 +285,205 @@ public class ExcelSheetService {
                 chunkMapper.updateById(chunk);
             }
         }
+    }
+
+    /**
+     * Replace all persisted sheets for a document with the current Luckysheet workbook snapshot.
+     */
+    @Transactional(rollbackFor = Exception.class)
+    public void replaceWorkbook(Long documentId, List<Map<String, Object>> workbookSheets) {
+        if (workbookSheets == null || workbookSheets.isEmpty()) {
+            throw new IllegalArgumentException("workbook sheets must not be empty");
+        }
+
+        QueryWrapper<ExcelSheetChunk> chunkQw = new QueryWrapper<>();
+        chunkQw.eq("document_id", documentId);
+        chunkMapper.delete(chunkQw);
+
+        ExcelSheet deleted = new ExcelSheet();
+        deleted.setStatus(3);
+        QueryWrapper<ExcelSheet> sheetQw = new QueryWrapper<>();
+        sheetQw.eq("document_id", documentId);
+        sheetMapper.update(deleted, sheetQw);
+
+        List<String> sheetNames = new ArrayList<>();
+        int visibleIndex = 0;
+
+        for (Map<String, Object> rawSheet : workbookSheets) {
+            if (rawSheet == null) continue;
+
+            String name = stringValue(rawSheet.get("name"), "Sheet" + (visibleIndex + 1));
+            sheetNames.add(name);
+
+            JSONObject config = toJsonObject(rawSheet.get("config"));
+            JSONObject merge = config.getJSONObject("merge");
+            JSONObject columnLen = config.getJSONObject("columnlen");
+            JSONObject rowLen = config.getJSONObject("rowlen");
+
+            if (merge == null) merge = new JSONObject();
+            if (columnLen == null) columnLen = new JSONObject();
+            if (rowLen == null) rowLen = new JSONObject();
+            config.put("merge", merge);
+            config.put("columnlen", columnLen);
+            config.put("rowlen", rowLen);
+
+            JSONArray celldata = resolveCelldata(rawSheet);
+            int totalRows = intValue(rawSheet.get("row"), calcTotalRows(rawSheet.get("data"), celldata));
+            int totalCols = intValue(rawSheet.get("column"), calcTotalCols(rawSheet.get("data"), celldata));
+
+            ExcelSheet sheet = new ExcelSheet();
+            sheet.setDocumentId(documentId);
+            sheet.setSheetIndex(visibleIndex);
+            sheet.setSheetName(name);
+            sheet.setTotalRows(Math.max(totalRows, 1));
+            sheet.setTotalCols(Math.max(totalCols, 1));
+            sheet.setChunkCount(0);
+            sheet.setMergeConfigJson(merge.toJSONString());
+            sheet.setColumnLenJson(columnLen.toJSONString());
+            sheet.setRowLenJson(rowLen.toJSONString());
+            sheet.setConfigJson(config.toJSONString());
+            sheet.setActive(intValue(rawSheet.get("status"), visibleIndex == 0 ? 1 : 0));
+            sheet.setStatus(1);
+            sheetMapper.insert(sheet);
+
+            int chunkCount = saveCelldataChunks(documentId, sheet.getId(), celldata, sheet.getTotalRows());
+            ExcelSheet update = new ExcelSheet();
+            update.setId(sheet.getId());
+            update.setChunkCount(chunkCount);
+            sheetMapper.updateById(update);
+
+            visibleIndex++;
+        }
+
+        if (sheetNames.isEmpty()) {
+            throw new IllegalArgumentException("workbook contains no valid sheets");
+        }
+
+        documentService.updateSheetMeta(documentId, sheetNames.size(), JSONArray.toJSONString(sheetNames));
+    }
+
+    private int saveCelldataChunks(Long documentId, Long sheetId, JSONArray celldata, int totalRows) {
+        Map<Integer, JSONArray> chunks = new LinkedHashMap<>();
+        int chunkSize = ExcelParserService.CHUNK_SIZE;
+
+        for (int i = 0; i < celldata.size(); i++) {
+            JSONObject cell = celldata.getJSONObject(i);
+            int row = cell.getIntValue("r");
+            int chunkIndex = row / chunkSize;
+            chunks.computeIfAbsent(chunkIndex, key -> new JSONArray()).add(cell);
+        }
+
+        if (chunks.isEmpty()) {
+            return Math.max(1, (int) Math.ceil(Math.max(totalRows, 1) / (double) chunkSize));
+        }
+
+        for (Map.Entry<Integer, JSONArray> entry : chunks.entrySet()) {
+            int chunkIndex = entry.getKey();
+            ExcelSheetChunk chunk = new ExcelSheetChunk();
+            chunk.setDocumentId(documentId);
+            chunk.setSheetId(sheetId);
+            chunk.setChunkIndex(chunkIndex);
+            chunk.setRowStart(chunkIndex * chunkSize);
+            chunk.setRowEnd((chunkIndex + 1) * chunkSize - 1);
+            chunk.setCelldataJson(entry.getValue().toJSONString());
+            chunkMapper.insert(chunk);
+        }
+
+        return chunks.keySet().stream().max(Integer::compareTo).orElse(0) + 1;
+    }
+
+    private JSONArray resolveCelldata(Map<String, Object> rawSheet) {
+        Object celldataObj = rawSheet.get("celldata");
+        JSONArray celldata = toJsonArray(celldataObj);
+        if (!celldata.isEmpty()) return normalizeCelldata(celldata);
+
+        return dataMatrixToCelldata(rawSheet.get("data"));
+    }
+
+    private JSONArray normalizeCelldata(JSONArray celldata) {
+        JSONArray normalized = new JSONArray();
+        for (int i = 0; i < celldata.size(); i++) {
+            JSONObject cell = celldata.getJSONObject(i);
+            if (cell == null || !cell.containsKey("r") || !cell.containsKey("c")) continue;
+            Object value = cell.get("v");
+            if (isEmptyCellValue(value)) continue;
+            normalized.add(cell);
+        }
+        return normalized;
+    }
+
+    private JSONArray dataMatrixToCelldata(Object dataObj) {
+        JSONArray rows = toJsonArray(dataObj);
+        JSONArray celldata = new JSONArray();
+
+        for (int r = 0; r < rows.size(); r++) {
+            JSONArray row = toJsonArray(rows.get(r));
+            for (int c = 0; c < row.size(); c++) {
+                Object value = row.get(c);
+                if (isEmptyCellValue(value)) continue;
+
+                JSONObject cell = new JSONObject();
+                cell.put("r", r);
+                cell.put("c", c);
+                cell.put("v", toJsonObject(value));
+                celldata.add(cell);
+            }
+        }
+        return celldata;
+    }
+
+    private boolean isEmptyCellValue(Object value) {
+        if (value == null) return true;
+        if (value instanceof JSONObject) return ((JSONObject) value).isEmpty();
+        if (value instanceof Map) return ((Map<?, ?>) value).isEmpty();
+        return false;
+    }
+
+    private int calcTotalRows(Object dataObj, JSONArray celldata) {
+        JSONArray rows = toJsonArray(dataObj);
+        int max = rows.size();
+        for (int i = 0; i < celldata.size(); i++) {
+            max = Math.max(max, celldata.getJSONObject(i).getIntValue("r") + 1);
+        }
+        return max;
+    }
+
+    private int calcTotalCols(Object dataObj, JSONArray celldata) {
+        JSONArray rows = toJsonArray(dataObj);
+        int max = 0;
+        for (int r = 0; r < rows.size(); r++) {
+            max = Math.max(max, toJsonArray(rows.get(r)).size());
+        }
+        for (int i = 0; i < celldata.size(); i++) {
+            max = Math.max(max, celldata.getJSONObject(i).getIntValue("c") + 1);
+        }
+        return max;
+    }
+
+    private JSONObject toJsonObject(Object value) {
+        if (value == null) return new JSONObject();
+        if (value instanceof JSONObject) return (JSONObject) value;
+        return JSONObject.parseObject(JSONObject.toJSONString(value));
+    }
+
+    private JSONArray toJsonArray(Object value) {
+        if (value == null) return new JSONArray();
+        if (value instanceof JSONArray) return (JSONArray) value;
+        return JSONArray.parseArray(JSONArray.toJSONString(value));
+    }
+
+    private int intValue(Object value, int defaultValue) {
+        if (value == null) return defaultValue;
+        try {
+            return Integer.parseInt(value.toString());
+        } catch (Exception ignored) {
+            return defaultValue;
+        }
+    }
+
+    private String stringValue(Object value, String defaultValue) {
+        if (value == null) return defaultValue;
+        String text = value.toString();
+        return text.trim().isEmpty() ? defaultValue : text;
     }
 }

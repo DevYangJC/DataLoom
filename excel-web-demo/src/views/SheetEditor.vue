@@ -34,7 +34,7 @@ import { computed, nextTick, onBeforeUnmount, onMounted, reactive, ref } from 'v
 import { useRoute, useRouter } from 'vue-router'
 import { ArrowLeft, Download, Loading, Upload } from '@element-plus/icons-vue'
 import { ElLoading, ElMessage } from 'element-plus'
-import { batchUpdateCells, getDocument, loadAllCelldata } from '@/api/excel'
+import { getDocument, loadAllCelldata, saveWorkbook } from '@/api/excel'
 import { exportExcel } from '@/utils/export'
 
 const route = useRoute()
@@ -49,13 +49,14 @@ const loadedChunks = ref(0)
 const totalChunks = ref(0)
 const saving = ref(false)
 const exporting = ref(false)
+const workbookDirty = ref(false)
 const sheetIdMap = reactive({})
 const dirtyCells = reactive({})
 
 let keydownHandler = null
 let toolbarClickHandler = null
 
-const hasUnsavedChanges = computed(() => Object.keys(dirtyCells).length > 0)
+const hasUnsavedChanges = computed(() => workbookDirty.value || Object.keys(dirtyCells).length > 0)
 
 onMounted(async () => {
   await initDocument()
@@ -99,19 +100,15 @@ async function initDocument() {
     })
 
     const sheets = buildInitialSheets(metas)
-    const firstMeta = metas[0]
-    if (firstMeta) {
-      loading.setText(`正在加载 ${firstMeta.sheetName || 'Sheet1'}...`)
-      sheets[0].celldata = await fetchSheetCelldata(firstMeta)
+    for (let index = 0; index < metas.length; index += 1) {
+      const meta = metas[index]
+      loading.setText(`正在加载 ${meta.sheetName || `Sheet${index + 1}`}...`)
+      sheets[index].celldata = await fetchSheetCelldata(meta)
     }
 
     loading.close()
     await nextTick()
     initLuckysheet(sheets)
-
-    if (metas.length > 1) {
-      loadRestSheets(metas, sheets)
-    }
   } catch (error) {
     loading.close()
     ElMessage.error(`打开文档失败：${error.message}`)
@@ -129,22 +126,29 @@ function buildInitialSheets(metas) {
       status: 1,
       order: 0,
       celldata: [],
-      config: { merge: {}, columnlen: {} }
+      config: { merge: {}, columnlen: {}, rowlen: {} }
     }]
   }
 
-  return metas.map((meta, index) => ({
-    name: meta.sheetName || `Sheet${index + 1}`,
-    index: String(index),
-    status: index === 0 ? 1 : 0,
-    order: index,
-    celldata: [],
-    config: {
-      merge: meta.mergeConfig || {},
-      columnlen: meta.columnLen || {}
-    },
-    _sheetId: meta.sheetId
-  }))
+  return metas.map((meta, index) => {
+    const config = meta.config && Object.keys(meta.config).length > 0
+      ? meta.config
+      : {
+          merge: meta.mergeConfig || {},
+          columnlen: meta.columnLen || {},
+          rowlen: meta.rowLen || {}
+        }
+
+    return {
+      name: meta.sheetName || `Sheet${index + 1}`,
+      index: String(index),
+      status: index === 0 ? 1 : 0,
+      order: index,
+      celldata: [],
+      config,
+      _sheetId: meta.sheetId
+    }
+  })
 }
 
 async function fetchSheetCelldata(meta) {
@@ -174,6 +178,8 @@ async function loadRestSheets(metas, sheets) {
     sheets[index].celldata = celldata
     injectSheetData(index, celldata)
   }
+  workbookDirty.value = false
+  Object.keys(dirtyCells).forEach((key) => delete dirtyCells[key])
 }
 
 function initLuckysheet(sheets) {
@@ -202,13 +208,18 @@ function initLuckysheet(sheets) {
       status: sheet.status ?? (index === 0 ? 1 : 0),
       order: index,
       celldata: sheet.celldata || [],
-      config: sheet.config || { merge: {}, columnlen: {} }
+      config: sheet.config || { merge: {}, columnlen: {}, rowlen: {} }
     })),
     hook: {
-      updated: () => markCurrentSelectionDirty(),
+      updated: () => {
+        workbookDirty.value = true
+        markCurrentSelectionDirty()
+      },
       cellUpdated: (r, c, oldValue, newValue) => markCellDirty(r, c, newValue)
     }
   })
+  workbookDirty.value = false
+  Object.keys(dirtyCells).forEach((key) => delete dirtyCells[key])
 
   keydownHandler = (event) => {
     if (event.key === 'Delete' || event.key === 'Backspace') {
@@ -250,6 +261,8 @@ function markCellDirty(r, c, newValue) {
   const currentSheet = luckysheet?.getSheet?.()
   if (!currentSheet) return
 
+  workbookDirty.value = true
+
   const dbSheetId = sheetIdMap[currentSheet.index]
   if (!dbSheetId) return
 
@@ -263,6 +276,8 @@ function markCurrentSelectionDirty() {
   const ranges = luckysheet?.getRange?.()
   const currentSheet = luckysheet?.getSheet?.()
   if (!ranges?.length || !currentSheet) return
+
+  workbookDirty.value = true
 
   const dbSheetId = sheetIdMap[currentSheet.index]
   if (!dbSheetId) return
@@ -285,22 +300,81 @@ function markCurrentSelectionDirty() {
 }
 
 async function saveChanges() {
-  const updates = Object.values(dirtyCells)
-  if (updates.length === 0) {
-    ElMessage.info('没有需要保存的修改')
+  const sheets = serializeWorkbook()
+  if (!sheets || sheets.length === 0) {
+    ElMessage.error('表格尚未初始化')
     return
   }
 
   saving.value = true
   try {
-    await batchUpdateCells(documentId.value, updates)
+    await saveWorkbook(documentId.value, sheets)
     Object.keys(dirtyCells).forEach((key) => delete dirtyCells[key])
-    ElMessage.success(`保存成功，共 ${updates.length} 个单元格`)
+    workbookDirty.value = false
+    sheetCount.value = sheets.length
+    sheets.forEach((sheet, index) => {
+      if (sheet._sheetId) sheetIdMap[String(index)] = sheet._sheetId
+    })
+    ElMessage.success(`保存成功，共 ${sheets.length} 个 Sheet`)
   } catch (error) {
     ElMessage.error(`保存失败：${error.message}`)
   } finally {
     saving.value = false
   }
+}
+
+function serializeWorkbook() {
+  const luckysheet = window.luckysheet
+  const rawSheets = luckysheet?.getluckysheetfile?.() || luckysheet?.getAllSheets?.()
+  const sheets = Array.isArray(rawSheets) ? rawSheets : rawSheets ? [rawSheets] : []
+
+  return sheets.map((sheet, index) => {
+    const data = Array.isArray(sheet.data) ? sheet.data : []
+    const celldata = data.length > 0 ? dataMatrixToCelldata(data) : normalizeCelldata(sheet.celldata || [])
+
+    return {
+      ...sheet,
+      name: sheet.name || `Sheet${index + 1}`,
+      order: sheet.order ?? index,
+      row: sheet.row || data.length || calcMaxRow(celldata),
+      column: sheet.column || calcMaxColumn(data, celldata),
+      config: sheet.config || { merge: {}, columnlen: {}, rowlen: {} },
+      celldata
+    }
+  })
+}
+
+function dataMatrixToCelldata(data) {
+  const celldata = []
+  data.forEach((row, r) => {
+    if (!Array.isArray(row)) return
+    row.forEach((cell, c) => {
+      if (isEmptyCell(cell)) return
+      celldata.push({ r, c, v: cell })
+    })
+  })
+  return celldata
+}
+
+function normalizeCelldata(celldata) {
+  if (!Array.isArray(celldata)) return []
+  return celldata.filter((cell) => cell && !isEmptyCell(cell.v))
+}
+
+function isEmptyCell(cell) {
+  if (!cell) return true
+  if (typeof cell === 'object') return Object.keys(cell).length === 0
+  return false
+}
+
+function calcMaxRow(celldata) {
+  return celldata.reduce((max, cell) => Math.max(max, Number(cell.r || 0) + 1), 1)
+}
+
+function calcMaxColumn(data, celldata) {
+  const dataCols = data.reduce((max, row) => Math.max(max, Array.isArray(row) ? row.length : 0), 0)
+  const cellCols = celldata.reduce((max, cell) => Math.max(max, Number(cell.c || 0) + 1), 0)
+  return Math.max(dataCols, cellCols, 1)
 }
 
 async function exportCurrentWorkbook() {

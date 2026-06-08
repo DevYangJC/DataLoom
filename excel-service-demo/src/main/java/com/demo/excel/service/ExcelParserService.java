@@ -106,10 +106,21 @@ public class ExcelParserService {
         sheetEntity.setTotalCols(maxCol);
 
         // 合并单元格配置（通常很小，直接 JSON 存这里）
-        sheetEntity.setMergeConfigJson(buildMergeConfigJson(sheet));
+        JSONObject mergeConfig = buildMergeConfig(sheet);
+        sheetEntity.setMergeConfigJson(mergeConfig.toJSONString());
 
         // 列宽配置
-        sheetEntity.setColumnLenJson(buildColumnLenJson(sheet, maxCol));
+        JSONObject columnLen = buildColumnLen(sheet, maxCol);
+        sheetEntity.setColumnLenJson(columnLen.toJSONString());
+
+        JSONObject rowLen = buildRowLen(sheet);
+        sheetEntity.setRowLenJson(rowLen.toJSONString());
+
+        JSONObject config = new JSONObject();
+        config.put("merge", mergeConfig);
+        config.put("columnlen", columnLen);
+        config.put("rowlen", rowLen);
+        sheetEntity.setConfigJson(config.toJSONString());
 
         // chunkCount 先设 0，等分块写入后再更新
         sheetEntity.setChunkCount(0);
@@ -281,7 +292,7 @@ public class ExcelParserService {
     /**
      * 构建合并单元格配置 JSON（Luckysheet merge 格式）
      */
-    private String buildMergeConfigJson(Sheet sheet) {
+    private JSONObject buildMergeConfig(Sheet sheet) {
         JSONObject mergeConfig = new JSONObject();
         for (CellRangeAddress range : sheet.getMergedRegions()) {
             String key = range.getFirstRow() + "_" + range.getFirstColumn();
@@ -292,13 +303,13 @@ public class ExcelParserService {
             item.put("cs", range.getLastColumn() - range.getFirstColumn() + 1);
             mergeConfig.put(key, item);
         }
-        return mergeConfig.toJSONString();
+        return mergeConfig;
     }
 
     /**
      * 构建列宽配置 JSON（Luckysheet columnlen 格式）
      */
-    private String buildColumnLenJson(Sheet sheet, int maxCol) {
+    private JSONObject buildColumnLen(Sheet sheet, int maxCol) {
         JSONObject colWidths = new JSONObject();
         try {
             for (int ci = 0; ci < maxCol; ci++) {
@@ -308,7 +319,19 @@ public class ExcelParserService {
         } catch (Exception ignored) {
             // 部分 sheet 可能无行数据，忽略
         }
-        return colWidths.toJSONString();
+        return colWidths;
+    }
+
+    private JSONObject buildRowLen(Sheet sheet) {
+        JSONObject rowHeights = new JSONObject();
+        for (Row row : sheet) {
+            if (row == null) continue;
+            float height = row.getHeightInPoints();
+            if (height > 0) {
+                rowHeights.put(String.valueOf(row.getRowNum()), Math.round(height / 0.75f));
+            }
+        }
+        return rowHeights;
     }
 
     private String formatNum(double num) {

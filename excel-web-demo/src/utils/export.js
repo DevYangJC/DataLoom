@@ -9,6 +9,7 @@ export async function exportExcel(sheets, fileName = 'DataLoom') {
     if (!sheet || !Array.isArray(sheet.data) || sheet.data.length === 0) return
 
     const worksheet = workbook.addWorksheet(sheet.name || `Sheet${index + 1}`)
+    applyDimensions(sheet.config || {}, worksheet)
     applyCells(sheet.data, worksheet)
     applyMerges(sheet.config?.merge || {}, worksheet)
     applyBorders(sheet.config?.borderInfo || [], worksheet)
@@ -25,6 +26,22 @@ export async function exportExcel(sheets, fileName = 'DataLoom') {
   FileSaver.saveAs(blob, `${sanitizeFileName(fileName)}.xlsx`)
 }
 
+function applyDimensions(config, worksheet) {
+  Object.entries(config.columnlen || {}).forEach(([index, px]) => {
+    const width = Number(px)
+    if (Number.isFinite(width) && width > 0) {
+      worksheet.getColumn(Number(index) + 1).width = Math.max(8, Math.round(width / 7.2))
+    }
+  })
+
+  Object.entries(config.rowlen || {}).forEach(([index, px]) => {
+    const height = Number(px)
+    if (Number.isFinite(height) && height > 0) {
+      worksheet.getRow(Number(index) + 1).height = Math.max(12, Math.round(height * 0.75))
+    }
+  })
+}
+
 function applyCells(rows, worksheet) {
   rows.forEach((row, rowIndex) => {
     if (!Array.isArray(row)) return
@@ -39,6 +56,7 @@ function applyCells(rows, worksheet) {
       target.font = convertFont(cell)
       target.alignment = convertAlignment(cell)
       target.value = convertValue(cell)
+      target.numFmt = convertNumberFormat(cell)
     })
   })
 }
@@ -79,9 +97,15 @@ function applyBorders(borderInfo, worksheet) {
 }
 
 function convertValue(cell) {
-  if (cell.f) return { formula: cell.f, result: cell.v }
+  if (cell.f) return { formula: String(cell.f).replace(/^=/, ''), result: cell.v }
   if (!cell.v && cell.ct?.s) return cell.ct.s.map((item) => item.v).join('')
   return cell.v ?? ''
+}
+
+function convertNumberFormat(cell) {
+  const format = cell.ct?.fa
+  if (!format || format === 'General') return undefined
+  return format.replace(/YYYY/g, 'yyyy')
 }
 
 function convertFill(bg) {
@@ -189,8 +213,23 @@ function convertBorderStyle(style = 1) {
 }
 
 function stripColor(color) {
-  if (!color || color.startsWith('rgb')) return '000000'
-  return color.replace('#', '').toUpperCase()
+  if (!color) return 'FF000000'
+
+  const rgb = String(color).match(/rgba?\((\d+),\s*(\d+),\s*(\d+)/i)
+  if (rgb) {
+    return `FF${[rgb[1], rgb[2], rgb[3]]
+      .map((part) => Number(part).toString(16).padStart(2, '0'))
+      .join('')
+      .toUpperCase()}`
+  }
+
+  const hex = String(color).replace('#', '').toUpperCase()
+  if (hex.length === 3) {
+    return `FF${hex.split('').map((char) => char + char).join('')}`
+  }
+  if (hex.length === 6) return `FF${hex}`
+  if (hex.length === 8) return hex
+  return 'FF000000'
 }
 
 function sanitizeFileName(fileName) {

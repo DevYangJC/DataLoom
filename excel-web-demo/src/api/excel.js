@@ -47,6 +47,10 @@ export function batchUpdateCells(docId, updates) {
   return api.put(`/document/${docId}/cells/batch`, updates)
 }
 
+export function saveWorkbook(docId, sheets) {
+  return api.put(`/document/${docId}/workbook`, { sheets })
+}
+
 export async function downloadExcel(id) {
   const response = await api.get(`/${id}/export`, { responseType: 'blob' })
   const disposition = response.headers['content-disposition']

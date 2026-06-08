@@ -43,6 +43,12 @@ public class ExcelSheet {
     /** 列宽配置 JSON */
     private String columnLenJson;
 
+    /** 行高配置 JSON */
+    private String rowLenJson;
+
+    /** Luckysheet 完整 config JSON */
+    private String configJson;
+
     /** 是否为活动 Sheet：1=是，0=否 */
     private Integer active;
 
