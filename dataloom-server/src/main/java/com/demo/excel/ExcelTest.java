@@ -19,7 +19,7 @@ public class ExcelTest {
 
     public static void main(String[] args) {
         try {
-            File file = new File("d:/Develop/Code/Work-Code-ZX/code/excel-demo/excel-service-demo/upload/5e9182a0-2fa9-4dbe-b571-ab6aee145451_土木工程学院_2026年硕士研究生复试名单-公示.xlsx");
+            File file = new File("d:/Develop/Code/Work-Code-ZX/code/excel-demo/dataloom-server/upload/5e9182a0-2fa9-4dbe-b571-ab6aee145451_土木工程学院_2026年硕士研究生复试名单-公示.xlsx");
             if (!file.exists()) {
                 System.out.println("File not found: " + file.getAbsolutePath());
                 return;

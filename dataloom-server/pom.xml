@@ -5,11 +5,11 @@
     <modelVersion>4.0.0</modelVersion>
 
     <groupId>com.demo</groupId>
-    <artifactId>excel-service-demo</artifactId>
+    <artifactId>dataloom-server</artifactId>
     <version>1.0.0</version>
     <packaging>jar</packaging>
 
-    <name>excel-service-demo</name>
+    <name>dataloom-server</name>
     <description>Excel 协作编辑系统 - 最小化 Demo (Phase 1)</description>
 
     <parent>

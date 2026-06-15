@@ -161,7 +161,7 @@ cd DataLoom
 <summary><b>2. 启动后端</b></summary>
 
 ```bash
-cd excel-service-demo
+cd dataloom-server
 mvn spring-boot:run
 ```
 
@@ -175,7 +175,7 @@ mvn spring-boot:run
 <summary><b>3. 启动前端</b></summary>
 
 ```bash
-cd excel-web-demo
+cd dataloom-web
 npm install
 npm run dev
 ```
@@ -218,7 +218,7 @@ npm run dev
 
 ```
 DataLoom/
-├── excel-service-demo/         # Spring Boot 后端
+├── dataloom-server/            # Spring Boot 后端
 │   ├── pom.xml                 # Maven 依赖配置
 │   └── src/main/
 │       ├── java/com/demo/excel/
@@ -229,7 +229,7 @@ DataLoom/
 │       └── resources/
 │           ├── application.yml # Spring Boot 配置
 │           └── schema.sql      # H2 建表语句
-├── excel-web-demo/             # Vue 3 前端
+├── dataloom-web/               # Vue 3 前端
 │   ├── package.json
 │   ├── vite.config.js          # Vite 配置（含 API 代理）
 │   └── src/
