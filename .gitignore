@@ -19,8 +19,6 @@ dataloom-server/upload/
 dataloom-server/src/main/resources/upload/
 dataloom-server/upload_response*.json
 
-
-
 # Databases and generated data
 *.db
 *.mv.db
