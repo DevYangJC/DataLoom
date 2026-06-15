@@ -1,0 +1,22 @@
+FROM maven:3.8.8-eclipse-temurin-8 AS build
+
+WORKDIR /workspace/dataloom-server
+
+COPY dataloom-server/pom.xml ./pom.xml
+RUN mvn -B -DskipTests dependency:go-offline
+
+COPY dataloom-server/src ./src
+RUN mvn -B -DskipTests package
+
+FROM eclipse-temurin:8-jre
+
+WORKDIR /app
+
+ENV JAVA_OPTS=""
+
+COPY --from=build /workspace/dataloom-server/target/*.jar /app/app.jar
+
+EXPOSE 9191
+
+ENTRYPOINT ["sh", "-c", "java $JAVA_OPTS -jar /app/app.jar"]
+

@@ -121,6 +121,14 @@ public class ExcelDocumentController {
             info.put("mergeConfig", mergeConfig);
             info.put("columnLen", columnLen);
             info.put("rowLen", rowLen);
+            JSONObject hyperlink = parseObjectOrEmpty(s.getHyperlinkConfigJson());
+            info.put("hyperlink", hyperlink);
+            JSONObject images = parseObjectOrEmpty(s.getImagesConfigJson());
+            info.put("images", images);
+            JSONArray conditionFormat = parseArrayOrEmpty(s.getConditionFormatJson());
+            info.put("luckysheet_conditionformat_save", conditionFormat);
+            JSONArray chart = parseArrayOrEmpty(s.getChartJson());
+            info.put("chart", chart);
             sheetInfoList.add(info);
         }
 
@@ -340,6 +348,18 @@ public class ExcelDocumentController {
             return parsed == null ? new JSONObject() : parsed;
         } catch (Exception ignored) {
             return new JSONObject();
+        }
+    }
+
+    private JSONArray parseArrayOrEmpty(String json) {
+        if (json == null || json.trim().isEmpty()) {
+            return new JSONArray();
+        }
+        try {
+            JSONArray parsed = JSONArray.parseArray(json);
+            return parsed == null ? new JSONArray() : parsed;
+        } catch (Exception ignored) {
+            return new JSONArray();
         }
     }
 }

@@ -1,6 +1,6 @@
 # Dependencies
 node_modules/
-excel-web-demo/.npm-cache/
+dataloom-web/.npm-cache/
 
 # Frontend build output
 dist/
@@ -14,10 +14,12 @@ target/
 *.war
 
 # Runtime data and uploaded files
-excel-service-demo/data/
-excel-service-demo/upload/
-excel-service-demo/src/main/resources/upload/
-excel-service-demo/upload_response*.json
+dataloom-server/data/
+dataloom-server/upload/
+dataloom-server/src/main/resources/upload/
+dataloom-server/upload_response*.json
+
+
 
 # Databases and generated data
 *.db
@@ -46,3 +48,7 @@ Thumbs.db
 .env
 .env.*
 !.env.example
+
+# Official implementations
+luckysheet-vue3-vite/
+LuckysheetServer/

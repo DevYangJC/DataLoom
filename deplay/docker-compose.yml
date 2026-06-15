@@ -1,0 +1,33 @@
+services:
+  dataloom-server:
+    build:
+      context: ..
+      dockerfile: deplay/Dockerfile.server
+    container_name: dataloom-server
+    restart: unless-stopped
+    environment:
+      JAVA_OPTS: "-Xms256m -Xmx1024m"
+      SPRING_APPLICATION_NAME: dataloom-server
+      SPRING_DATASOURCE_URL: "jdbc:h2:file:/app/data/excel-demo;DB_CLOSE_DELAY=-1;MODE=MySQL"
+      EXCEL_UPLOAD_PATH: "/app/upload"
+    volumes:
+      - dataloom_data:/app/data
+      - dataloom_uploads:/app/upload
+    ports:
+      - "9191:9191"
+
+  dataloom-web:
+    build:
+      context: ..
+      dockerfile: deplay/Dockerfile.web
+    container_name: dataloom-web
+    restart: unless-stopped
+    depends_on:
+      - dataloom-server
+    ports:
+      - "8081:80"
+
+volumes:
+  dataloom_data:
+  dataloom_uploads:
+

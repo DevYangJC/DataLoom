@@ -1,0 +1,17 @@
+FROM node:20-alpine AS build
+
+WORKDIR /workspace/dataloom-web
+
+COPY dataloom-web/package*.json ./
+RUN npm ci
+
+COPY dataloom-web/ ./
+RUN npm run build
+
+FROM nginx:1.27-alpine
+
+COPY deplay/nginx.conf /etc/nginx/conf.d/default.conf
+COPY --from=build /workspace/dataloom-web/dist /usr/share/nginx/html
+
+EXPOSE 80
+

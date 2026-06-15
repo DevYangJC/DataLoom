@@ -34,6 +34,10 @@ CREATE TABLE IF NOT EXISTS excel_sheet (
     column_len_json     CLOB,
     row_len_json        CLOB,
     config_json         CLOB,
+    hyperlink_config_json CLOB,
+    images_config_json  CLOB,
+    condition_format_json CLOB,
+    chart_json          CLOB,
     active              INT            DEFAULT 0,
     status              INT            DEFAULT 1,
     create_time         TIMESTAMP      DEFAULT CURRENT_TIMESTAMP,
@@ -42,6 +46,10 @@ CREATE TABLE IF NOT EXISTS excel_sheet (
 
 ALTER TABLE excel_sheet ADD COLUMN IF NOT EXISTS row_len_json CLOB;
 ALTER TABLE excel_sheet ADD COLUMN IF NOT EXISTS config_json CLOB;
+ALTER TABLE excel_sheet ADD COLUMN IF NOT EXISTS hyperlink_config_json CLOB;
+ALTER TABLE excel_sheet ADD COLUMN IF NOT EXISTS images_config_json CLOB;
+ALTER TABLE excel_sheet ADD COLUMN IF NOT EXISTS condition_format_json CLOB;
+ALTER TABLE excel_sheet ADD COLUMN IF NOT EXISTS chart_json CLOB;
 
 -- ==============================
 -- 3. Sheet 数据分块表（每块约 1000 行）
@@ -89,10 +97,14 @@ CREATE TABLE IF NOT EXISTS excel_sheet_chunk (
 --     column_len_json     LONGTEXT       COMMENT '列宽配置 JSON',
 --     row_len_json        LONGTEXT       COMMENT '行高配置 JSON',
 --     config_json         LONGTEXT       COMMENT 'Luckysheet 完整 config JSON',
+--     hyperlink_config_json LONGTEXT     COMMENT 'Luckysheet 超链接配置 JSON',
+--     images_config_json  LONGTEXT       COMMENT 'Luckysheet 图片配置 JSON',
+--     condition_format_json LONGTEXT     COMMENT 'Luckysheet 条件格式配置 JSON',
+--     chart_json          LONGTEXT       COMMENT 'Luckysheet 图表配置 JSON',
 --     active              TINYINT        DEFAULT 0 COMMENT '是否激活：1是 0否',
 --     status              TINYINT        DEFAULT 1 COMMENT '1正常 3已删除',
---     create_time         DATETIME       DEFAULT CURRENT_TIMESTAMP,
---     update_time         DATETIME       DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+--     create_time         DATETIME       DEFAULT CURRENT_TIMESTAMP COMMENT '创建时间',
+--     update_time         DATETIME       DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP COMMENT '更新时间',
 --     INDEX idx_document_id (document_id)
 -- ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='Excel Sheet 元信息表';
 --

@@ -49,6 +49,18 @@ public class ExcelSheet {
     /** Luckysheet 完整 config JSON */
     private String configJson;
 
+    /** Luckysheet 超链接配置 JSON，保存单元格与超链接映射关系 */
+    private String hyperlinkConfigJson;
+
+    /** Luckysheet 图片配置 JSON，保存插入的图片信息（Base64等） */
+    private String imagesConfigJson;
+
+    /** Luckysheet 条件格式配置 JSON */
+    private String conditionFormatJson;
+
+    /** Luckysheet 图表配置 JSON */
+    private String chartJson;
+
     /** 是否为活动 Sheet：1=是，0=否 */
     private Integer active;
 

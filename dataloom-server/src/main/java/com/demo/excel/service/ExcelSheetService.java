@@ -316,6 +316,23 @@ public class ExcelSheetService {
             sheetNames.add(name);
 
             JSONObject config = toJsonObject(rawSheet.get("config"));
+            JSONObject hyperlink = toJsonObject(rawSheet.get("hyperlink"));
+            if (hyperlink == null) {
+                hyperlink = new JSONObject();
+            }
+            JSONObject images = toJsonObject(rawSheet.get("images"));
+            if (images == null) {
+                images = new JSONObject();
+            }
+            JSONArray conditionFormat = toJsonArray(rawSheet.get("luckysheet_conditionformat_save"));
+            if (conditionFormat == null) {
+                conditionFormat = new JSONArray();
+            }
+            JSONArray chart = toJsonArray(rawSheet.get("chart"));
+            if (chart == null) {
+                chart = new JSONArray();
+            }
+
             JSONObject merge = config.getJSONObject("merge");
             JSONObject columnLen = config.getJSONObject("columnlen");
             JSONObject rowLen = config.getJSONObject("rowlen");
@@ -342,6 +359,10 @@ public class ExcelSheetService {
             sheet.setColumnLenJson(columnLen.toJSONString());
             sheet.setRowLenJson(rowLen.toJSONString());
             sheet.setConfigJson(config.toJSONString());
+            sheet.setHyperlinkConfigJson(hyperlink.toJSONString());
+            sheet.setImagesConfigJson(images.toJSONString());
+            sheet.setConditionFormatJson(conditionFormat.toJSONString());
+            sheet.setChartJson(chart.toJSONString());
             sheet.setActive(intValue(rawSheet.get("status"), visibleIndex == 0 ? 1 : 0));
             sheet.setStatus(1);
             sheetMapper.insert(sheet);

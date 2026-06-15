@@ -126,7 +126,11 @@ function buildInitialSheets(metas) {
       status: 1,
       order: 0,
       celldata: [],
-      config: { merge: {}, columnlen: {}, rowlen: {} }
+      config: { merge: {}, columnlen: {}, rowlen: {} },
+      hyperlink: {},
+      images: {},
+      luckysheet_conditionformat_save: [],
+      chart: []
     }]
   }
 
@@ -146,7 +150,11 @@ function buildInitialSheets(metas) {
       order: index,
       celldata: [],
       config,
-      _sheetId: meta.sheetId
+      _sheetId: meta.sheetId,
+      hyperlink: meta.hyperlink || {},
+      images: meta.images || {},
+      luckysheet_conditionformat_save: meta.luckysheet_conditionformat_save || [],
+      chart: meta.chart || []
     }
   })
 }
@@ -202,20 +210,77 @@ function initLuckysheet(sheets) {
     showstatisticBar: true,
     allowUpdate: true,
     forceCalculation: true,
+    plugins: ['chart'],
+    pluginsUrl: 'https://cdn.jsdelivr.net/npm/luckysheet@2.1.13/dist',
     data: sheets.map((sheet, index) => ({
       name: sheet.name || `Sheet${index + 1}`,
       index: String(index),
       status: sheet.status ?? (index === 0 ? 1 : 0),
       order: index,
       celldata: sheet.celldata || [],
-      config: sheet.config || { merge: {}, columnlen: {}, rowlen: {} }
+      config: sheet.config || { merge: {}, columnlen: {}, rowlen: {} },
+      hyperlink: sheet.hyperlink || {},
+      images: sheet.images || {},
+      luckysheet_conditionformat_save: sheet.luckysheet_conditionformat_save || [],
+      chart: sheet.chart || []
     })),
     hook: {
       updated: () => {
         workbookDirty.value = true
         markCurrentSelectionDirty()
       },
-      cellUpdated: (r, c, oldValue, newValue) => markCellDirty(r, c, newValue)
+      cellUpdated: (r, c, oldValue, newValue) => markCellDirty(r, c, newValue),
+      imageDeleteAfter: (imageItem) => {
+        workbookDirty.value = true
+        console.log("====== [imageDeleteAfter] 触发了, imageItem:", imageItem)
+        const luckysheet = window.luckysheet
+        if (luckysheet?.getluckysheetfile && imageItem) {
+          const files = luckysheet.getluckysheetfile()
+          const targetId = imageItem.id || imageItem.imgId || imageItem.imageId
+          const targetSrc = imageItem.src
+
+          console.log("====== [imageDeleteAfter] 尝试删除, targetId:", targetId, "targetSrc (长度):", targetSrc ? targetSrc.length : 0)
+
+          files.forEach((sheet) => {
+            if (sheet.images) {
+              let deleted = false
+              
+              // 1. 优先通过 ID 匹配删除
+              if (targetId && sheet.images[targetId]) {
+                console.log("====== [imageDeleteAfter] 根据 ID 成功删除内存图片:", targetId)
+                delete sheet.images[targetId]
+                deleted = true
+              }
+              
+              // 2. 其次通过 src 匹配删除
+              if (targetSrc) {
+                Object.keys(sheet.images).forEach((key) => {
+                  if (sheet.images[key] && sheet.images[key].src === targetSrc) {
+                    console.log("====== [imageDeleteAfter] 根据 src 成功匹配并删除内存图片, key:", key)
+                    delete sheet.images[key]
+                    deleted = true
+                  }
+                })
+              }
+              
+              // 3. 最后通过坐标和尺寸做相似度匹配删除
+              if (!deleted) {
+                Object.keys(sheet.images).forEach((key) => {
+                  const img = sheet.images[key]
+                  if (img && 
+                      Math.abs((img.left || 0) - (imageItem.left || 0)) < 5 &&
+                      Math.abs((img.top || 0) - (imageItem.top || 0)) < 5 &&
+                      Math.abs((img.width || 0) - (imageItem.width || 0)) < 5 &&
+                      Math.abs((img.height || 0) - (imageItem.height || 0)) < 5) {
+                    console.log("====== [imageDeleteAfter] 根据坐标尺寸匹配并删除内存图片, key:", key)
+                    delete sheet.images[key]
+                  }
+                })
+              }
+            }
+          })
+        }
+      }
     }
   })
   workbookDirty.value = false
@@ -328,7 +393,7 @@ function serializeWorkbook() {
   const rawSheets = luckysheet?.getluckysheetfile?.() || luckysheet?.getAllSheets?.()
   const sheets = Array.isArray(rawSheets) ? rawSheets : rawSheets ? [rawSheets] : []
 
-  return sheets.map((sheet, index) => {
+  const serialized = sheets.map((sheet, index) => {
     const data = Array.isArray(sheet.data) ? sheet.data : []
     const celldata = data.length > 0 ? dataMatrixToCelldata(data) : normalizeCelldata(sheet.celldata || [])
 
@@ -342,6 +407,8 @@ function serializeWorkbook() {
       celldata
     }
   })
+  console.log("====== [serializeWorkbook] 准备提交的 sheets 数据:", serialized)
+  return serialized
 }
 
 function dataMatrixToCelldata(data) {

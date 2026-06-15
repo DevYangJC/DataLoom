@@ -3,7 +3,7 @@ server:
 
 spring:
   application:
-    name: excel-service-demo
+    name: dataloom-server
 
   # H2 内存数据库（Demo 用，启动即自动建表，无需安装 MySQL）
   datasource:
