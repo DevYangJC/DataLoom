@@ -23,7 +23,8 @@ export async function exportExcel(sheets, fileName = 'DataLoom') {
   const blob = new Blob([buffer], {
     type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet;charset=utf-8'
   })
-  FileSaver.saveAs(blob, `${sanitizeFileName(fileName)}.xlsx`)
+  const baseName = sanitizeFileName(fileName).replace(/\.xlsx$/i, '')
+  FileSaver.saveAs(blob, `${baseName}.xlsx`)
 }
 
 function applyDimensions(config, worksheet) {

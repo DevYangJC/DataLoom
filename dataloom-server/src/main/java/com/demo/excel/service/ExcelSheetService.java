@@ -69,26 +69,6 @@ public class ExcelSheetService {
     }
 
     /**
-     * 分页获取指定 Sheet 的数据分块（按 chunkIndex 范围查询）
-     * <p>
-     * 前端可先获取 Sheet 元信息中的 chunkCount，再按需加载某几块，
-     * 实现大数据量的虚拟滚动或懒加载。
-     *
-     * @param sheetId    Sheet ID
-     * @param chunkStart 起始块序号（含）
-     * @param chunkEnd   结束块序号（含）
-     * @return 分块列表
-     */
-    public List<ExcelSheetChunk> listChunksByRange(Long sheetId, int chunkStart, int chunkEnd) {
-        QueryWrapper<ExcelSheetChunk> qw = new QueryWrapper<>();
-        qw.eq("sheet_id", sheetId)
-          .ge("chunk_index", chunkStart)
-          .le("chunk_index", chunkEnd)
-          .orderByAsc("chunk_index");
-        return chunkMapper.selectList(qw);
-    }
-
-    /**
      * 删除文档下所有 Sheet 及 Chunk 数据（软删除 Sheet，物理删除 Chunk）
      *
      * @param documentId 文档 ID
@@ -108,89 +88,11 @@ public class ExcelSheetService {
     }
 
     /**
-     * 实时增量更新单个单元格数据
+     * 批量增量更新单元格 — 按 Chunk 分组后逐块事务写入
+     * <p>
+     * 性能优化：先将所有更新按 (sheetId_chunkIndex) 分组，
+     * 每组只读/写一次对应 Chunk，避免重复 I/O。
      *
-     * @param documentId 文档 ID
-     * @param sheetId    Sheet ID
-     * @param r          行号
-     * @param c          列号
-     * @param cellValue  单元格 v 对象（Luckysheet 格式）
-     */
-    public void updateCell(Long documentId, Long sheetId, int r, int c, com.alibaba.fastjson.JSONObject cellValue) {
-        // 计算应该落在哪个分块（依据 ExcelParserService.CHUNK_SIZE=1000）
-        int chunkSize = ExcelParserService.CHUNK_SIZE;
-        int targetChunkIndex = r / chunkSize;
-
-        QueryWrapper<ExcelSheetChunk> qw = new QueryWrapper<>();
-        qw.eq("sheet_id", sheetId).eq("chunk_index", targetChunkIndex);
-        ExcelSheetChunk chunk = chunkMapper.selectOne(qw);
-
-        com.alibaba.fastjson.JSONArray cellArray;
-        boolean isNewChunk = false;
-
-        if (chunk == null) {
-            // 这是一块之前完全没有数据（全空白）的区域，新建 Chunk
-            isNewChunk = true;
-            chunk = new ExcelSheetChunk();
-            chunk.setDocumentId(documentId);
-            chunk.setSheetId(sheetId);
-            chunk.setChunkIndex(targetChunkIndex);
-            chunk.setRowStart(targetChunkIndex * chunkSize);
-            chunk.setRowEnd((targetChunkIndex + 1) * chunkSize - 1);
-            cellArray = new com.alibaba.fastjson.JSONArray();
-        } else {
-            // 解析现有的 celldata
-            String jsonStr = chunk.getCelldataJson();
-            cellArray = (jsonStr != null && !jsonStr.isEmpty())
-                    ? com.alibaba.fastjson.JSONArray.parseArray(jsonStr)
-                    : new com.alibaba.fastjson.JSONArray();
-        }
-
-        // 查找是否已存在该坐标的单元格
-        boolean found = false;
-        for (int i = 0; i < cellArray.size(); i++) {
-            com.alibaba.fastjson.JSONObject cell = cellArray.getJSONObject(i);
-            if (cell.getIntValue("r") == r && cell.getIntValue("c") == c) {
-                // 如果前端传 null 或者空，代表清空单元格；否则覆盖更新
-                if (cellValue == null || cellValue.isEmpty()) {
-                    cellArray.remove(i);
-                } else {
-                    cell.put("v", cellValue);
-                }
-                found = true;
-                break;
-            }
-        }
-
-        // 不存在且不是清空操作，则追加
-        if (!found && cellValue != null && !cellValue.isEmpty()) {
-            com.alibaba.fastjson.JSONObject newCell = new com.alibaba.fastjson.JSONObject();
-            newCell.put("r", r);
-            newCell.put("c", c);
-            newCell.put("v", cellValue);
-            cellArray.add(newCell);
-        }
-
-        // 回写 JSON
-        chunk.setCelldataJson(cellArray.toJSONString());
-
-        if (isNewChunk) {
-            chunkMapper.insert(chunk);
-            // 更新 sheet 的 chunk_count（只增不减）
-            ExcelSheet sheet = sheetMapper.selectById(sheetId);
-            if (sheet != null && sheet.getChunkCount() <= targetChunkIndex) {
-                ExcelSheet sheetUpdate = new ExcelSheet();
-                sheetUpdate.setId(sheetId);
-                sheetUpdate.setChunkCount(targetChunkIndex + 1);
-                sheetMapper.updateById(sheetUpdate);
-            }
-        } else {
-            chunkMapper.updateById(chunk);
-        }
-    }
-
-    /**
-     * 批量事务更新多个单元格
      *
      * @param documentId 文档 ID
      * @param updates    更新列表
@@ -288,10 +190,14 @@ public class ExcelSheetService {
     }
 
     /**
-     * Replace all persisted sheets for a document with the current Luckysheet workbook snapshot.
+     * 全量替换工作簿 — 删除旧 Sheet/Chunk 后逐 Sheet 重建（事务保护）
+     * <p>
+     * 流程：物理删除所有 Chunk → 软删除所有 Sheet →
+     * 逐 Sheet 插入新记录 + 保存 celldata → 更新文档 sheet 元信息。
+     * 返回 {@code sheetIndex → 新SheetId} 映射，供前端后续增量保存。
      */
     @Transactional(rollbackFor = Exception.class)
-    public void replaceWorkbook(Long documentId, List<Map<String, Object>> workbookSheets) {
+    public Map<Integer, Long> replaceWorkbook(Long documentId, List<Map<String, Object>> workbookSheets) {
         if (workbookSheets == null || workbookSheets.isEmpty()) {
             throw new IllegalArgumentException("workbook sheets must not be empty");
         }
@@ -308,6 +214,7 @@ public class ExcelSheetService {
 
         List<String> sheetNames = new ArrayList<>();
         int visibleIndex = 0;
+        Map<Integer, Long> sheetIdMapping = new LinkedHashMap<>();
 
         for (Map<String, Object> rawSheet : workbookSheets) {
             if (rawSheet == null) continue;
@@ -367,6 +274,8 @@ public class ExcelSheetService {
             sheet.setStatus(1);
             sheetMapper.insert(sheet);
 
+            sheetIdMapping.put(visibleIndex, sheet.getId());
+
             int chunkCount = saveCelldataChunks(documentId, sheet.getId(), celldata, sheet.getTotalRows());
             ExcelSheet update = new ExcelSheet();
             update.setId(sheet.getId());
@@ -381,6 +290,7 @@ public class ExcelSheetService {
         }
 
         documentService.updateSheetMeta(documentId, sheetNames.size(), JSONArray.toJSONString(sheetNames));
+        return sheetIdMapping;
     }
 
     private int saveCelldataChunks(Long documentId, Long sheetId, JSONArray celldata, int totalRows) {

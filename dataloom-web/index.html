@@ -8,8 +8,24 @@
     <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/luckysheet@2.1.13/dist/plugins/plugins.css" />
     <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/luckysheet@2.1.13/dist/css/luckysheet.css" />
     <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/luckysheet@2.1.13/dist/assets/iconfont/iconfont.css" />
+    <!--
+      Luckysheet 图表插件依赖（必须按顺序作为全局变量预加载）。
+      内部 seriesLoadScripts 已通过本地修补版指向 data URI，
+      回调执行时从 window 读取这些全局变量。
+    -->
+    <!--
+      Luckysheet 图表插件需要四个全局变量 (Vue2 / Vuex / ElementUI / ECharts)。
+      chartmix 不在此预加载 —— 它由 luckysheet.umd.js 内部的 Lm 动态加载，
+      加载后立即在回调中创建 store 并 Vue.use()，保证状态一致性。
+    -->
+    <script src="https://cdn.jsdelivr.net/npm/vue@2.6.11/dist/vue.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/vuex@3.4.0/dist/vuex.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/element-ui@2.13.2/lib/index.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/echarts@4.8.0/dist/echarts.min.js"></script>
+    <!-- jQuery（luckysheet 依赖） -->
     <script src="https://cdn.jsdelivr.net/npm/luckysheet@2.1.13/dist/plugins/js/plugin.js"></script>
-    <script src="https://cdn.jsdelivr.net/npm/luckysheet@2.1.13/dist/luckysheet.umd.js"></script>
+    <!-- 本地修补版：bootcdn→jsDelivr，ch 数组替换为 data URI -->
+    <script src="/lib/luckysheet.umd.js"></script>
   </head>
   <body>
     <noscript>请启用 JavaScript 以运行 DataLoom。</noscript>

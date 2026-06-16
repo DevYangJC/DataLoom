@@ -28,15 +28,9 @@ import java.nio.file.Paths;
 import java.util.*;
 
 /**
- * Excel 文件上传 / 导出接口
+ * Excel 文件上传接口
  * <p>
- * 重新设计要点：
- * <ul>
- *   <li>上传时调用 {@link ExcelParserService#parseAndSave} 流式解析并分块写库，
- *       不再把所有数据拼成一个超大 JSON 字段</li>
- *   <li>上传成功后只返回 Sheet 元信息（名称、行列数等），不把 celldata 塞进响应体</li>
- *   <li>导出时从数据库按块顺序读取，拼装后用 EasyExcel 流式输出</li>
- * </ul>
+ * 注意：导出功能已由前端 ExcelJS 接管（保证样式零丢失），后端不提供导出接口。
  */
 @RestController
 @RequestMapping("/api/excel")
@@ -120,11 +114,6 @@ public class ExcelFileController {
             return ApiResponse.fail("上传失败: " + e.getMessage());
         }
     }
-
-    // =========================================================
-    // 导出接口已由前端（export.js + exceljs）接管
-    // 此处原有基于 POI + EasyExcel 且容易丢失样式的导出接口已移除
-    // =========================================================
 
     // =========================================================
     // 私有辅助方法

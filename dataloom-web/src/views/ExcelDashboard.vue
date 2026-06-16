@@ -73,10 +73,13 @@
           <el-table-column label="更新时间" width="190">
             <template #default="{ row }">{{ formatTime(row.updateTime) }}</template>
           </el-table-column>
-          <el-table-column label="操作" width="230" fixed="right">
+          <el-table-column label="操作" width="310" fixed="right">
             <template #default="{ row }">
               <el-button size="small" type="primary" :icon="EditPen" @click="openDocument(row.id)">
                 编辑
+              </el-button>
+              <el-button size="small" :icon="Edit" @click="renameDocumentAction(row)">
+                重命名
               </el-button>
               <el-button size="small" type="danger" :icon="Delete" @click="removeDocument(row)">
                 删除
@@ -103,9 +106,9 @@
 <script setup>
 import { onMounted, ref } from 'vue'
 import { useRouter } from 'vue-router'
-import { Delete, EditPen, Refresh, UploadFilled } from '@element-plus/icons-vue'
+import { Delete, Edit, EditPen, Refresh, UploadFilled } from '@element-plus/icons-vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
-import { deleteDocument, getDocumentList, uploadExcel } from '@/api/excel'
+import { deleteDocument, getDocumentList, renameDocument, uploadExcel } from '@/api/excel'
 
 const router = useRouter()
 const fileInput = ref(null)
@@ -172,9 +175,30 @@ function openDocument(id) {
   router.push({ name: 'SheetEditor', params: { id } })
 }
 
+async function renameDocumentAction(row) {
+  try {
+    const { value } = await ElMessageBox.prompt('请输入新名称', '重命名文档', {
+      confirmButtonText: '确认',
+      cancelButtonText: '取消',
+      inputValue: row.name,
+      inputValidator: (val) => (val && val.trim() ? true : '名称不能为空'),
+      inputErrorMessage: '名称不能为空'
+    })
+    if (!value || !value.trim()) return
+
+    await renameDocument(row.id, value.trim())
+    row.name = value.trim()
+    ElMessage.success('重命名成功')
+  } catch (error) {
+    if (error !== 'cancel' && error !== 'close') {
+      ElMessage.error(`重命名失败：${error.message}`)
+    }
+  }
+}
+
 async function removeDocument(row) {
   try {
-    await ElMessageBox.confirm(`确定删除文档“${row.name}”吗？`, '删除确认', {
+    await ElMessageBox.confirm(`确定删除文档”${row.name}”吗？`, '删除确认', {
       confirmButtonText: '删除',
       cancelButtonText: '取消',
       type: 'warning'

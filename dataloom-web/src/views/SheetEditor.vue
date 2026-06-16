@@ -4,7 +4,23 @@
       <div class="toolbar-left">
         <el-button :icon="ArrowLeft" @click="goBack">返回列表</el-button>
         <div class="doc-meta">
-          <strong>{{ documentName || '未命名文档' }}</strong>
+          <strong
+            v-if="!editingName"
+            class="doc-name"
+            title="点击重命名"
+            @click="startRename"
+          >{{ documentName || '未命名文档' }}</strong>
+          <div v-else class="doc-name-edit">
+            <input
+              ref="nameInput"
+              v-model="renameValue"
+              class="rename-input"
+              maxlength="200"
+              @keydown.enter="confirmRename"
+              @keydown.escape="cancelRename"
+              @blur="confirmRename"
+            />
+          </div>
           <span v-if="loadingSheet">加载 Sheet 数据：{{ loadedChunks }}/{{ totalChunks }} 块</span>
           <span v-else>{{ sheetCount }} 个 Sheet</span>
         </div>
@@ -34,8 +50,9 @@ import { computed, nextTick, onBeforeUnmount, onMounted, reactive, ref } from 'v
 import { useRoute, useRouter } from 'vue-router'
 import { ArrowLeft, Download, Loading, Upload } from '@element-plus/icons-vue'
 import { ElLoading, ElMessage } from 'element-plus'
-import { getDocument, loadAllCelldata, saveWorkbook } from '@/api/excel'
+import { batchUpdateCells, getDocument, loadAllCelldata, renameDocument, saveWorkbook } from '@/api/excel'
 import { exportExcel } from '@/utils/export'
+import { defaultOption } from '@/utils/chartmixDefaultOption'
 
 const route = useRoute()
 const router = useRouter()
@@ -50,13 +67,50 @@ const totalChunks = ref(0)
 const saving = ref(false)
 const exporting = ref(false)
 const workbookDirty = ref(false)
+const structureDirty = ref(false)
 const sheetIdMap = reactive({})
 const dirtyCells = reactive({})
+
+/** 初始化完成后拍的结构快照，用于判断是否需要全量保存 */
+let structureSnapshot = null
 
 let keydownHandler = null
 let toolbarClickHandler = null
 
-const hasUnsavedChanges = computed(() => workbookDirty.value || Object.keys(dirtyCells).length > 0)
+const hasUnsavedChanges = computed(() =>
+  workbookDirty.value || structureDirty.value || Object.keys(dirtyCells).length > 0
+)
+
+// ── 文档重命名 ──
+const editingName = ref(false)
+const renameValue = ref('')
+const nameInput = ref(null)
+
+function startRename() {
+  renameValue.value = documentName.value
+  editingName.value = true
+  setTimeout(() => nameInput.value?.focus(), 50)
+}
+
+async function confirmRename() {
+  if (!editingName.value) return
+  const newName = renameValue.value.trim()
+  editingName.value = false
+
+  if (!newName || newName === documentName.value) return
+
+  try {
+    await renameDocument(documentId.value, newName)
+    documentName.value = newName
+    ElMessage.success('重命名成功')
+  } catch (error) {
+    ElMessage.error(`重命名失败：${error.message}`)
+  }
+}
+
+function cancelRename() {
+  editingName.value = false
+}
 
 onMounted(async () => {
   await initDocument()
@@ -191,6 +245,70 @@ async function loadRestSheets(metas, sheets) {
 }
 
 function initLuckysheet(sheets) {
+  console.log("====== [initLuckysheet] 原始传入的 sheets chart:", JSON.stringify(sheets.map(s => s.chart)))
+  
+  const finalSheets = sheets.map((sheet, index) => {
+    const finalChart = (sheet.chart || []).map((c) => {
+      if (c) {
+        let chartType = 'line'
+        const series = c.chartOptions?.series
+        if (Array.isArray(series) && series.length > 0) {
+          chartType = series[0]?.type || 'line'
+        }
+        const fullChartType = `echarts|${chartType}|default`
+        
+        if (!c.chartType) {
+          c.chartType = fullChartType
+        }
+        if (!c.chartOptions) {
+          c.chartOptions = {}
+        }
+        if (!c.chartOptions.chart_id) {
+          c.chartOptions.chart_id = c.chart_id
+        }
+        if (!c.chartOptions.chartAllType) {
+          c.chartOptions.chartAllType = fullChartType
+        }
+        if (!c.chartOptions.rangeArray) {
+          c.chartOptions.rangeArray = [{ row: [0, 0], column: [0, 0] }]
+        }
+        if (!c.chartOptions.rangeColCheck) {
+          c.chartOptions.rangeColCheck = { exits: true, clear: [0, 0], type: ['number', 'number'] }
+        }
+        if (!c.chartOptions.rangeRowCheck) {
+          c.chartOptions.rangeRowCheck = { exits: true, clear: [0, 0], type: ['string', 'number'] }
+        }
+        if (c.chartOptions.rangeConfigCheck === undefined) {
+          c.chartOptions.rangeConfigCheck = false
+        }
+        if (!c.chartOptions.chartDataSeriesOrder) {
+          c.chartOptions.chartDataSeriesOrder = { 0: 0, length: 1 }
+        }
+        
+        // Ensure defaultOption exists to prevent chartmix crash
+        if (!c.chartOptions.defaultOption) {
+          c.chartOptions.defaultOption = JSON.parse(JSON.stringify(defaultOption || {}));
+        }
+      }
+      return c
+    })
+    console.log(`====== [initLuckysheet] Sheet[${index}] 补全后的 chart:`, JSON.stringify(finalChart))
+    return {
+      name: sheet.name || `Sheet${index + 1}`,
+      index: String(index),
+      status: sheet.status ?? (index === 0 ? 1 : 0),
+      order: index,
+      celldata: sheet.celldata || [],
+      config: sheet.config || { merge: {}, columnlen: {}, rowlen: {} },
+      hyperlink: sheet.hyperlink || {},
+      images: sheet.images || {},
+      luckysheet_conditionformat_save: sheet.luckysheet_conditionformat_save || [],
+      chart: finalChart
+    }
+  })
+  
+  console.log("====== [initLuckysheet] 准备传给 luckysheet.create 的 data 中的 chart:", JSON.stringify(finalSheets.map(s => s.chart)))
+
   if (!window.luckysheet) {
     ElMessage.error('Luckysheet 资源未加载，请检查网络或 CDN 配置')
     return
@@ -211,20 +329,12 @@ function initLuckysheet(sheets) {
     allowUpdate: true,
     forceCalculation: true,
     plugins: ['chart'],
-    pluginsUrl: 'https://cdn.jsdelivr.net/npm/luckysheet@2.1.13/dist',
-    data: sheets.map((sheet, index) => ({
-      name: sheet.name || `Sheet${index + 1}`,
-      index: String(index),
-      status: sheet.status ?? (index === 0 ? 1 : 0),
-      order: index,
-      celldata: sheet.celldata || [],
-      config: sheet.config || { merge: {}, columnlen: {}, rowlen: {} },
-      hyperlink: sheet.hyperlink || {},
-      images: sheet.images || {},
-      luckysheet_conditionformat_save: sheet.luckysheet_conditionformat_save || [],
-      chart: sheet.chart || []
-    })),
+    pluginsUrl: window.location.origin,
+    data: finalSheets,
     hook: {
+      workbookCreateAfter: () => {
+        console.log("====== [workbookCreateAfter] 触发了")
+      },
       updated: () => {
         workbookDirty.value = true
         markCurrentSelectionDirty()
@@ -232,6 +342,7 @@ function initLuckysheet(sheets) {
       cellUpdated: (r, c, oldValue, newValue) => markCellDirty(r, c, newValue),
       imageDeleteAfter: (imageItem) => {
         workbookDirty.value = true
+        structureDirty.value = true
         console.log("====== [imageDeleteAfter] 触发了, imageItem:", imageItem)
         const luckysheet = window.luckysheet
         if (luckysheet?.getluckysheetfile && imageItem) {
@@ -244,14 +355,14 @@ function initLuckysheet(sheets) {
           files.forEach((sheet) => {
             if (sheet.images) {
               let deleted = false
-              
+
               // 1. 优先通过 ID 匹配删除
               if (targetId && sheet.images[targetId]) {
                 console.log("====== [imageDeleteAfter] 根据 ID 成功删除内存图片:", targetId)
                 delete sheet.images[targetId]
                 deleted = true
               }
-              
+
               // 2. 其次通过 src 匹配删除
               if (targetSrc) {
                 Object.keys(sheet.images).forEach((key) => {
@@ -262,12 +373,12 @@ function initLuckysheet(sheets) {
                   }
                 })
               }
-              
+
               // 3. 最后通过坐标和尺寸做相似度匹配删除
               if (!deleted) {
                 Object.keys(sheet.images).forEach((key) => {
                   const img = sheet.images[key]
-                  if (img && 
+                  if (img &&
                       Math.abs((img.left || 0) - (imageItem.left || 0)) < 5 &&
                       Math.abs((img.top || 0) - (imageItem.top || 0)) < 5 &&
                       Math.abs((img.width || 0) - (imageItem.width || 0)) < 5 &&
@@ -284,7 +395,11 @@ function initLuckysheet(sheets) {
     }
   })
   workbookDirty.value = false
+  structureDirty.value = false
   Object.keys(dirtyCells).forEach((key) => delete dirtyCells[key])
+
+  // ★ 拍一张结构快照，用于后续判断是否只需要增量保存单元格
+  captureStructureSnapshot()
 
   keydownHandler = (event) => {
     if (event.key === 'Delete' || event.key === 'Backspace') {
@@ -364,23 +479,150 @@ function markCurrentSelectionDirty() {
   })
 }
 
+/**
+ * 拍摄当前工作簿的结构快照（不含 celldata）。
+ * 后续保存时对比快照，若结构未变则只走增量单元格更新。
+ */
+function captureStructureSnapshot() {
+  const luckysheet = window.luckysheet
+  const files = luckysheet?.getluckysheetfile?.() || []
+  structureSnapshot = files.map((sheet) => ({
+    name: sheet.name,
+    index: sheet.index,
+    status: sheet.status,
+    order: sheet.order,
+    configSig: stableJson(sheet.config || {}),
+    imagesSig: stableJson(sheet.images || {}),
+    chartSig: stableJson(sheet.chart || []),
+    hyperlinkSig: stableJson(sheet.hyperlink || {}),
+    conditionFormatSig: stableJson(sheet.luckysheet_conditionformat_save || [])
+  }))
+}
+
+/**
+ * 对比当前 luckysheetfile 与结构快照。
+ * @returns {{ changed: boolean, reason?: string }}
+ */
+function detectStructuralChange() {
+  const luckysheet = window.luckysheet
+  const files = luckysheet?.getluckysheetfile?.() || []
+
+  if (!structureSnapshot || files.length !== structureSnapshot.length) {
+    return { changed: true, reason: `Sheet 数量变化: ${structureSnapshot?.length ?? 0} → ${files.length}` }
+  }
+
+  for (let i = 0; i < files.length; i++) {
+    const cur = files[i]
+    const snap = structureSnapshot[i]
+    if (!snap) return { changed: true, reason: `Sheet[${i}] 为新增` }
+
+    if (cur.name !== snap.name) return { changed: true, reason: `Sheet[${i}] 名称变更: "${snap.name}" → "${cur.name}"` }
+    if (cur.status !== snap.status) return { changed: true, reason: `Sheet[${i}] 激活状态变更` }
+    if (cur.order !== snap.order) return { changed: true, reason: `Sheet[${i}] 顺序变更` }
+
+    if (stableJson(cur.config || {}) !== snap.configSig) return { changed: true, reason: `Sheet[${i}] config 变更（合并单元格/列宽/行高）` }
+    if (stableJson(cur.images || {}) !== snap.imagesSig) return { changed: true, reason: `Sheet[${i}] 图片变更` }
+    if (stableJson(cur.chart || []) !== snap.chartSig) return { changed: true, reason: `Sheet[${i}] 图表变更` }
+    if (stableJson(cur.hyperlink || {}) !== snap.hyperlinkSig) return { changed: true, reason: `Sheet[${i}] 超链接变更` }
+    if (stableJson(cur.luckysheet_conditionformat_save || []) !== snap.conditionFormatSig) return { changed: true, reason: `Sheet[${i}] 条件格式变更` }
+  }
+
+  return { changed: false }
+}
+
+/**
+ * 稳定 JSON 序列化（排序 key），用于结构对比。
+ */
+function stableJson(obj) {
+  return JSON.stringify(obj, (_, value) => {
+    if (value && typeof value === 'object' && !Array.isArray(value)) {
+      return Object.keys(value)
+        .sort()
+        .reduce((acc, key) => { acc[key] = value[key]; return acc }, {})
+    }
+    return value
+  })
+}
+
 async function saveChanges() {
-  const sheets = serializeWorkbook()
-  if (!sheets || sheets.length === 0) {
+  const luckysheet = window.luckysheet
+  if (!luckysheet) {
     ElMessage.error('表格尚未初始化')
     return
   }
 
   saving.value = true
   try {
-    await saveWorkbook(documentId.value, sheets)
+    const structuralChange = detectStructuralChange()
+    const cellDirtyCount = Object.keys(dirtyCells).length
+
+    if (structuralChange.changed) {
+      // ── 结构/图片/图表/超链接/条件格式有变化 → 全量快照保存 ──
+      console.log(`====== [saveChanges] 结构变更 [${structuralChange.reason}]，使用全量快照保存`)
+      const sheets = serializeWorkbook()
+      if (!sheets || sheets.length === 0) {
+        ElMessage.error('表格数据为空')
+        return
+      }
+
+      const response = await saveWorkbook(documentId.value, sheets)
+      const payload = response.data
+      if (payload?.success && payload.data?.sheetIdMap) {
+        // ★ 用后端返回的新 sheetId 刷新映射表
+        const newIdMap = payload.data.sheetIdMap
+        Object.keys(newIdMap).forEach((key) => {
+          sheetIdMap[String(key)] = String(newIdMap[key])
+        })
+        sheetCount.value = payload.data.sheetCount || sheets.length
+        console.log('====== [saveChanges] sheetIdMap 已刷新:', JSON.stringify(sheetIdMap))
+      } else {
+        sheetCount.value = sheets.length
+      }
+    } else if (cellDirtyCount > 0) {
+      // ── 只有单元格数据变化 → 增量更新 ──
+      console.log(`====== [saveChanges] 仅单元格变更，增量更新 ${cellDirtyCount} 个单元格`)
+      const updates = Object.values(dirtyCells).map((item) => ({
+        sheetId: Number(item.sheetId),
+        r: item.r,
+        c: item.c,
+        v: item.v
+      }))
+      await batchUpdateCells(documentId.value, updates)
+    } else if (workbookDirty.value) {
+      // dirty 标记被设置了但没有可追踪的变更（兜底：全量保存以防万一）
+      console.log('====== [saveChanges] workbookDirty 但无可追踪变更，兜底全量保存')
+      const sheets = serializeWorkbook()
+      if (sheets && sheets.length > 0) {
+        const response = await saveWorkbook(documentId.value, sheets)
+        const payload = response.data
+        if (payload?.success && payload.data?.sheetIdMap) {
+          const newIdMap = payload.data.sheetIdMap
+          Object.keys(newIdMap).forEach((key) => {
+            sheetIdMap[String(key)] = String(newIdMap[key])
+          })
+          sheetCount.value = payload.data.sheetCount || sheets.length
+        } else {
+          sheetCount.value = sheets.length
+        }
+      }
+    } else {
+      ElMessage.info('没有需要保存的修改')
+      return
+    }
+
+    // 重置脏标记
     Object.keys(dirtyCells).forEach((key) => delete dirtyCells[key])
     workbookDirty.value = false
-    sheetCount.value = sheets.length
-    sheets.forEach((sheet, index) => {
-      if (sheet._sheetId) sheetIdMap[String(index)] = sheet._sheetId
-    })
-    ElMessage.success(`保存成功，共 ${sheets.length} 个 Sheet`)
+    structureDirty.value = false
+
+    // 全量保存后刷新结构快照
+    if (structuralChange.changed) {
+      captureStructureSnapshot()
+    }
+
+    ElMessage.success(structuralChange.changed
+      ? `保存成功（全量），共 ${sheetCount.value} 个 Sheet`
+      : `保存成功（增量），更新 ${cellDirtyCount} 个单元格`)
   } catch (error) {
     ElMessage.error(`保存失败：${error.message}`)
   } finally {
@@ -390,12 +632,140 @@ async function saveChanges() {
 
 function serializeWorkbook() {
   const luckysheet = window.luckysheet
+
+  // ========================================================================
+  // ★ 图表保存策略（四步法）
+  //
+  // 背景：Luckysheet 2.1.13 chartmix 插件的 chart 数据生命周期：
+  //   创建图表 → chartmix Vuex store 中存 chartOptions
+  //               → sheet.chart[] 中 push 基本信息（但 chartOptions 可能为空）
+  //   保存时需要 → 调用 getluckysheetfile(true) 从 store 回填 chartOptions
+  //
+  // 问题：如果之前某次保存时 chartOptions 丢失（空对象），重新加载后：
+  //   - dh() 初始化时 insertToStore({chartOptions: {}}) 可能失败
+  //   - chartmix store 中没有该 chart_id 的条目
+  //   - getluckysheetfile(true) 遍历到它就崩溃，阻断后续有效图表
+  //
+  // 解决：先 ECharts 兜底 → 清理僵尸 → 安全刷新 → 序列化
+  // ========================================================================
+
+  // ── 第 1 步：获取 sheet 数据的引用 ──
+  // getluckysheetfile() 返回 ga.luckysheetfile 的直接引用，
+  // 修改返回值的属性就是修改 Luckysheet 内部状态。
   const rawSheets = luckysheet?.getluckysheetfile?.() || luckysheet?.getAllSheets?.()
   const sheets = Array.isArray(rawSheets) ? rawSheets : rawSheets ? [rawSheets] : []
+
+  // ── 第 2 步：ECharts 实例兜底 ──
+  // 先尝试从页面上已渲染的 ECharts 实例提取 chartOptions。
+  // 这一步必须在 getluckysheetfile(true) 之前执行，
+  // 因为 getluckysheetfile(true) 可能覆盖已有的 chartOptions。
+  sheets.forEach((sheet) => {
+    if (!Array.isArray(sheet.chart) || sheet.chart.length === 0) return
+    sheet.chart.forEach((chartItem) => {
+      if (!chartItem || !chartItem.chart_id) return
+      // 如果已有有效 chartOptions（例如从后端加载的旧有效图表），跳过
+      if (chartItem.chartOptions && typeof chartItem.chartOptions === 'object'
+          && Object.keys(chartItem.chartOptions).length > 0) {
+        return
+      }
+      // 尝试从 DOM 中的 ECharts 实例提取配置
+      try {
+        if (!window.echarts) return
+        // chartmix DOM 结构：chart_id + "_c" 是外层容器，
+        // .luckysheet-modal-dialog-content（id = chart_id）是 ECharts 渲染目标
+        const candidateIds = [chartItem.chart_id, `${chartItem.chart_id}_c`]
+        let echartsInstance = null
+        for (const domId of candidateIds) {
+          const dom = document.getElementById(domId)
+          if (!dom) continue
+          echartsInstance = window.echarts.getInstanceByDom(dom)
+          if (echartsInstance) break
+          // chartmix 可能在子 div 上创建 ECharts 实例
+          const children = dom.querySelectorAll('div[_echarts_instance_], canvas')
+          for (const child of children) {
+            echartsInstance = window.echarts.getInstanceByDom(child.parentElement || child)
+            if (echartsInstance) break
+          }
+          if (echartsInstance) break
+        }
+        if (echartsInstance) {
+          chartItem.chartOptions = echartsInstance.getOption()
+          console.log(`====== [serializeWorkbook] 从 ECharts 实例恢复 chart[${chartItem.chart_id}] 的 chartOptions`)
+        }
+      } catch (e) {
+        console.warn(`====== [serializeWorkbook] ECharts 恢复 chart[${chartItem.chart_id}] 失败:`, e.message)
+      }
+    })
+  })
+
+  // ── 第 3 步：清理僵尸 chart ──
+  // 经过 ECharts 兜底后，仍然没有 chartOptions 的 chart 项就是"僵尸数据"：
+  // - 之前某次保存时 chartOptions 丢失
+  // - 重新加载时 chartmix 也无法渲染它们
+  // - DOM 和 ECharts 实例都不存在
+  // 从 ga.luckysheetfile 中清理它们，防止后续 getluckysheetfile(true) 崩溃
+  let cleanedCount = 0
+  sheets.forEach((sheet) => {
+    if (!Array.isArray(sheet.chart) || sheet.chart.length === 0) return
+    const before = sheet.chart.length
+    sheet.chart = sheet.chart.filter((c) => {
+      if (!c || !c.chart_id) return false
+      const hasValidOptions = c.chartOptions
+        && typeof c.chartOptions === 'object'
+        && Object.keys(c.chartOptions).length > 0
+      return hasValidOptions
+    })
+    cleanedCount += before - sheet.chart.length
+  })
+  if (cleanedCount > 0) {
+    console.warn(`====== [serializeWorkbook] 清理了 ${cleanedCount} 个无法恢复的僵尸 chart 数据`)
+  }
+
+  // ── 第 4 步：安全调用 getluckysheetfile(true) ──
+  // 僵尸 chart 已清理，此时 chart 数组中只剩有效图表。
+  // 调用 getluckysheetfile(true) 用 chartmix 原生格式的 chartOptions 覆盖
+  // （比 ECharts getOption() 的格式更精确，恢复时兼容性更好）
+  try {
+    luckysheet?.getluckysheetfile?.(true)
+    console.log('====== [serializeWorkbook] getluckysheetfile(true) 成功，已用 chartmix 原生格式刷新 chartOptions')
+  } catch (e) {
+    // 即使仍然失败，第 2 步的 ECharts 兜底已经保证了 chartOptions 不为空
+    console.warn('====== [serializeWorkbook] getluckysheetfile(true) 仍然失败:', e.message, '（将使用 ECharts 兜底数据）')
+  }
+
+  // ── 第 5 步：序列化 ──
+  // 调试日志
+  sheets.forEach((s, i) => {
+    const chartSummary = (s.chart || []).map((c) => ({
+      id: c?.chart_id,
+      hasOptions: !!(c?.chartOptions && Object.keys(c.chartOptions).length > 0)
+    }))
+    if (chartSummary.length > 0) {
+      console.log(`====== [serializeWorkbook] Sheet[${i}] chart 摘要:`, JSON.stringify(chartSummary))
+    }
+  })
 
   const serialized = sheets.map((sheet, index) => {
     const data = Array.isArray(sheet.data) ? sheet.data : []
     const celldata = data.length > 0 ? dataMatrixToCelldata(data) : normalizeCelldata(sheet.celldata || [])
+
+    // 最终过滤：只保存有有效 chartOptions 的 chart 项
+    let safeChart = []
+    if (Array.isArray(sheet.chart)) {
+      safeChart = sheet.chart
+        .filter((c) => c && c.chart_id && c.chartOptions && Object.keys(c.chartOptions).length > 0)
+        .map((c) => {
+          if (c && !c.chartType) {
+            let chartType = 'line'
+            const series = c.chartOptions?.series
+            if (Array.isArray(series) && series.length > 0) {
+              chartType = series[0]?.type || 'line'
+            }
+            c.chartType = `echarts|${chartType}|default`
+          }
+          return { ...c }
+        })
+    }
 
     return {
       ...sheet,
@@ -404,12 +774,16 @@ function serializeWorkbook() {
       row: sheet.row || data.length || calcMaxRow(celldata),
       column: sheet.column || calcMaxColumn(data, celldata),
       config: sheet.config || { merge: {}, columnlen: {}, rowlen: {} },
-      celldata
+      celldata,
+      chart: safeChart
     }
   })
-  console.log("====== [serializeWorkbook] 准备提交的 sheets 数据:", serialized)
+  console.log('====== [serializeWorkbook] 准备提交的 sheets 数据:', serialized)
   return serialized
 }
+
+
+
 
 function dataMatrixToCelldata(data) {
   const celldata = []
@@ -515,6 +889,33 @@ function goBack() {
 .doc-meta strong {
   max-width: 360px;
   font-size: 14px;
+}
+
+.doc-meta .doc-name {
+  cursor: pointer;
+  transition: color 0.15s;
+}
+
+.doc-meta .doc-name:hover {
+  color: var(--dl-accent-strong);
+}
+
+.doc-name-edit {
+  display: flex;
+  align-items: center;
+}
+
+.rename-input {
+  width: 280px;
+  max-width: 200px;
+  padding: 4px 8px;
+  border: 1px solid var(--dl-accent-strong);
+  border-radius: 4px;
+  font-size: 14px;
+  font-weight: 600;
+  outline: none;
+  background: #fff;
+  box-shadow: 0 0 0 2px rgba(47, 125, 87, 0.12);
 }
 
 .doc-meta span {
