@@ -47,6 +47,17 @@ Thumbs.db
 .env.*
 !.env.example
 
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.egg-info/
+.venv/
+venv/
+
+# Test data
+test_*.xlsx
+
 # Official implementations
 luckysheet-vue3-vite/
 LuckysheetServer/
